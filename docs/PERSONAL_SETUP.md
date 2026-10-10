@@ -12,6 +12,10 @@ Git acima identifica precisamente o conjunto de funcionalidades incorporado.
 
 ## Alterações
 
+- Tela **Cash → Results (Ctrl+R)** com resultados por dia/semana/mês/ano,
+  VPIP/PFR, lucro, bb/100, EV e EV bb/100, quatro curvas e acesso às mãos do
+  período. Sem seletor ou agrupamento de moeda; primeira versão cash USD.
+  Veja [CALENDAR_RESULTS.md](CALENDAR_RESULTS.md).
 - Efeitos sonoros no hand replayer, com opção **Sound** para ativar/silenciar.
 - Preferência de som persistente; volume local fixo em 50%, sem slider.
 - Efeitos carregados da instalação local do PokerStars: check, fold, aposta,
