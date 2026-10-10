@@ -64,6 +64,7 @@ def parse_args(argv=None):
     parser.add_argument("--big-blinds", action="store_true", help="capture BB mode without changing saved preferences")
     parser.add_argument("--side-pots", action="store_true", help="include a synthetic, conserved two-pot scenario")
     parser.add_argument("--polish-cases", action="store_true", help="include portrait and controlled fold frames")
+    parser.add_argument("--pokerstars-path", type=Path, help="read complete card faces from this local client installation")
     return parser.parse_args(argv)
 
 
@@ -71,6 +72,25 @@ def configure_capture_units(replayer, enabled: bool) -> None:
     replayer.bigBlindCheck.blockSignals(True)
     replayer.bigBlindCheck.setChecked(enabled)
     replayer.bigBlindCheck.blockSignals(False)
+
+
+def configure_capture_client(config, path: Path | None) -> None:
+    if path:
+        config.supported_sites["PokerStars"].site_path = str(path.expanduser().resolve())
+
+
+def settle_capture(replayer, app, width: int, height: int) -> None:
+    replayer.audio.stop()
+    replayer.show()
+    app.processEvents()
+    # Let queued window geometry restoration finish before setting the size.
+    replayer.resize(width, height)
+    deadline = monotonic() + 0.6
+    while replayer._fold_timer.isActive() and monotonic() < deadline:
+        app.processEvents()
+        sleep(0.01)
+    for _ in range(3):
+        app.processEvents()
 
 
 def main(argv=None) -> int:
@@ -90,6 +110,7 @@ def main(argv=None) -> int:
     ThemeManager().set_qt_material_theme("dark_purple.xml", save=False, apply_to_ui=True)
     with tempfile.TemporaryDirectory(prefix="fpdb-replayer-review-") as temporary:
         config = Configuration.Config(file=str(root / "HUD_config.xml.example"), custom_log_dir=temporary)
+        configure_capture_client(config, args.pokerstars_path)
         fixture = root / "tests/fixtures/hands/pokerstars/review/nl_3bet_6max.txt"
         hand = PokerStars(config=config, in_path=str(fixture), autostart=True).getProcessedHands()[0]
         # Only reconstruction is replaced: the widgets, model, layout and paint
@@ -123,15 +144,7 @@ def main(argv=None) -> int:
             else:
                 index = next(i for i, state in enumerate(replayer.states) if state.street == street)
             replayer.stateSlider.setValue(index)
-            replayer.audio.stop()
-            replayer.show()
-            # Capture settled frames, not transient folding/discard animation.
-            deadline = monotonic() + 0.6
-            while replayer._fold_timer.isActive() and monotonic() < deadline:
-                app.processEvents()
-                sleep(0.01)
-            for _ in range(3):
-                app.processEvents()
+            settle_capture(replayer, app, width, height)
             pixmap = replayer.grab()
             if not pixmap.save(str(output / filename)):
                 raise RuntimeError(f"Could not save {filename}")

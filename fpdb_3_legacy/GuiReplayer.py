@@ -66,7 +66,7 @@ from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.replayer_audio import ReplayerAudio, transition_sound
 from fpdb_3_legacy.replayer_chip_renderer import draw_chip_amount
 from fpdb_3_legacy.replayer_controls import ReplayControlButton
-from fpdb_3_legacy.replayer_style import FONT_SCALE, REPLAYER_STYLE, replay_font
+from fpdb_3_legacy.replayer_style import REPLAYER_STYLE, replay_font
 
 # import L10n
 # _ = L10n.get_translation()
@@ -736,6 +736,11 @@ def build_replay_layout(
         )
         bet_x = cluster.center().x() + ux * (edge_distance + 58)
         bet_y = cluster.center().y() + uy * (edge_distance + 38)
+        if anchor.y > .6 and abs(anchor.x) < .35:
+            # The bottom seat faces both the board and the top seat's bets.
+            # Its own bet belongs beside its cards, not across that shared lane.
+            bet_x = cards_rect.right() + 108
+            bet_y = cards_rect.center().y()
 
         dealer_x = table_rect.center().x() + anchor.x * table_rect.width() * 0.38
         dealer_y = table_rect.center().y() + anchor.y * table_rect.height() * 0.38
@@ -1863,12 +1868,25 @@ class GuiReplayer(QWidget):
         self.nextButton.setEnabled(self.stateSlider.value() < self.stateSlider.maximum())
 
     def _paint_card(self, painter: QPainter, card: str, rect: QRectF) -> None:
-        """Give the colour deck legible ranks and suits; keep other deck assets."""
+        """Use complete faces for colour; retain its subtle patterned backs."""
         if getattr(self, "_record_board_cards", False):
             self._board_regions.append(QRectF(rect))
         if self.deckType != "colour":
             assert self.cardImages is not None
             painter.drawPixmap(rect.toRect(), self.cardImages[Card.encodeCard(card)])
+            return
+        if card not in {"0", "0x"}:
+            from fpdb_3_legacy.replayer_cards import ReplayCardFaces
+
+            if not hasattr(self, "_complete_card_faces"):
+                self._complete_card_faces = ReplayCardFaces(self.conf)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 65))
+            painter.drawRoundedRect(rect.adjusted(1, 3, -1, 0), 4, 4)
+            painter.drawPixmap(rect.toRect(), self._complete_card_faces.face(card))
+            painter.restore()
             return
         painter.save()
         hidden = card in {"0", "0x"}
@@ -1900,36 +1918,6 @@ class GuiReplayer(QWidget):
             painter.setPen(QPen(QColor("#788b9c"), .8))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(inset, 2, 2)
-        else:
-            suit = card[-1]
-            color, symbol = {
-                "s": ("#29323c", "♠"), "h": ("#b94050", "♥"),
-                "d": ("#326bb0", "♦"), "c": ("#26845e", "♣"),
-            }[suit]
-            painter.setPen(QColor(color))
-            font = QFont("DejaVu Sans", 10, QFont.Weight.Bold)
-            font.setPixelSize(round(rect.height() * .26 * FONT_SCALE))
-            # Keep the entire index inside the exposed portion of overlapping
-            # cards, including the two-character ten and its optical padding.
-            pad = rect.width() * .09
-            index_w = rect.width() * (CARD_SPACING_RATIO - .16)
-            rank = "10" if card[:-1] == "T" else card[:-1]
-            while QFontMetrics(font).horizontalAdvance(rank) > index_w and font.pixelSize() > 12:
-                font.setPixelSize(font.pixelSize() - 1)
-            painter.setFont(font)
-            index = QRectF(rect.x() + pad, rect.y() + rect.height() * .06, index_w, rect.height() * .41)
-            painter.drawText(index, Qt.AlignmentFlag.AlignCenter, rank)
-            font.setPixelSize(round(rect.height() * .20 * FONT_SCALE))
-            painter.setFont(font)
-            index.moveTop(rect.y() + rect.height() * .43)
-            index.setHeight(rect.height() * .33)
-            painter.drawText(index, Qt.AlignmentFlag.AlignCenter, symbol)
-            painter.setOpacity(painter.opacity() * .16)
-            font.setPixelSize(round(rect.height() * .38))
-            painter.setFont(font)
-            pip = QRectF(rect.x() + rect.width() * .49, rect.y() + rect.height() * .57,
-                         rect.width() * .44, rect.height() * .37)
-            painter.drawText(pip, Qt.AlignmentFlag.AlignCenter, symbol)
         painter.restore()
 
     def _draw_cards(
@@ -2194,7 +2182,7 @@ class GuiReplayer(QWidget):
         if not board_cards:
             pot_rect = QRectF(
                 layout.table_rect.center().x() - 88,
-                layout.table_rect.center().y() - 14,
+                layout.table_rect.center().y() + 14,
                 176,
                 28,
             )
@@ -2399,8 +2387,10 @@ class GuiReplayer(QWidget):
             painter.drawText(combo_rect, Qt.AlignmentFlag.AlignCenter, combo_text)
 
         if player.chips:
-            cluster = seat.cards_rect.united(seat.panel_rect)
+            cluster = seat.panel_rect
             target = seat.bet_rect.center()
+            if abs(seat.center.x() - layout.table_rect.center().x()) < cluster.width() / 2 and target.y() < cluster.top():
+                cluster = seat.cards_rect
             owner = QPointF(
                 max(cluster.left(), min(target.x(), cluster.right())),
                 max(cluster.top(), min(target.y(), cluster.bottom())),

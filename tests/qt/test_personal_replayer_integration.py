@@ -64,7 +64,7 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
     assert not replayer.audio.enabled
     assert settings.value("sound/enabled", type=bool) is False
     replayer.soundCheck.setChecked(True)
-    assert replayer.audio.volume == 100
+    assert replayer.audio.volume == 50
     assert not hasattr(replayer, "soundVolume")
     assert not hasattr(replayer, "playPauseButton")
     assert not hasattr(replayer, "playTimer")

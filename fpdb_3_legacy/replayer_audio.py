@@ -112,7 +112,7 @@ class ReplayerAudio(QObject):
         super().__init__(parent)
         self.settings = QSettings("fpdb", "replayer")
         self.enabled = self.settings.value("sound/enabled", True, type=bool)
-        self.volume = 100
+        self.volume = 50
         self.effects = {}
         try:
             paths = prepare_sounds(config)
