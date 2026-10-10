@@ -58,12 +58,43 @@ def capture_polish_cases(replayer, app, output: Path) -> None:
     replayer._clear_card_animations()
 
 
+def capture_bet_cases(replayer, hand, app, output: Path) -> None:
+    """Public five-handed turn reproducing 12 BB facing a raise to 24 BB."""
+    from fpdb_3_legacy.GuiReplayer import TableState
+
+    review = copy.copy(hand)
+    review.players = review.players[:5]
+    review.gametype = dict(review.gametype)
+    review.gametype["bb"] = ".01"
+    review.bb = Decimal(".01")
+    review.board = {"FLOP": ["6d", "2h", "Ts"], "TURN": ["8c"], "RIVER": []}
+    state = TableState(review)
+    state.startPhase("FLOP")
+    state.startPhase("TURN")
+    state.pot = state.newpot = Decimal(".17")
+    state.players["Player3"].stack -= Decimal(".17")
+    state.players["Hero"].holecards = ["7s", "Ks"]
+    before = copy.deepcopy(state)
+    state.updateForAction(("Hero", "bets", Decimal(".12")))
+    state.updateForAction(("Player4", "raises", Decimal(".12")))
+    replayer.replay_model.hand = review
+    replayer.info = replayer._format_hand_info(review)
+    replayer.states = replayer.replay_model.states = [before, state]
+    replayer._configure_replay_units(review)
+    replayer.stateSlider.setMaximum(1)
+    replayer.stateSlider.setValue(1)
+    for width, height in ((1280, 720), (1260, 1380)):
+        settle_capture(replayer, app, width, height)
+        replayer.grab().save(str(output / f"turn-bets-{width}.png"))
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--big-blinds", action="store_true", help="capture BB mode without changing saved preferences")
     parser.add_argument("--side-pots", action="store_true", help="include a synthetic, conserved two-pot scenario")
     parser.add_argument("--polish-cases", action="store_true", help="include portrait and controlled fold frames")
+    parser.add_argument("--bet-cases", action="store_true", help="include the five-handed turn with 12 BB facing 24 BB")
     parser.add_argument("--pokerstars-path", type=Path, help="read complete card faces from this local client installation")
     return parser.parse_args(argv)
 
@@ -163,6 +194,8 @@ def main(argv=None) -> int:
             capture_polish_cases(replayer, app, output)
         if args.side_pots:
             capture_side_pots(replayer, hand, app, output)
+        if args.bet_cases:
+            capture_bet_cases(replayer, hand, app, output)
         replayer.close()
         app.processEvents()
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

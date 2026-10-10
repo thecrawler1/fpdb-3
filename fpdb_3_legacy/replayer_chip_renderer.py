@@ -1,6 +1,7 @@
 """Compact felt-side chip stacks and high-contrast monetary labels."""
 
 from decimal import Decimal
+from math import sqrt
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
@@ -24,7 +25,44 @@ def _draw_denomination(painter: QPainter, stack: ChipStack, top: QRectF, color: 
     painter.drawText(top, Qt.AlignmentFlag.AlignCenter, denomination)
 
 
-def _place_amount(anchor: QPointF, width: float, height: float, avoid: tuple[QRectF, ...], available: QRectF | None) -> QRectF:
+def _inside_felt(bounds: QRectF, felt: QRectF | None) -> bool:
+    if felt is None:
+        return True
+    rx, ry = felt.width() / 2, felt.height() / 2
+    if rx <= 0 or ry <= 0:
+        return False
+    # Check the farthest corner, not merely the group's centre or the oval's
+    # bounding box: either would allow chips and labels outside the felt.
+    x = (abs(bounds.center().x() - felt.center().x()) + bounds.width() / 2) / rx
+    y = (abs(bounds.center().y() - felt.center().y()) + bounds.height() / 2) / ry
+    return x * x + y * y <= 1
+
+
+def _felt_candidates(anchor: QPointF, width: float, height: float, felt: QRectF, xs: set[float], ys: set[float]) -> list[tuple[float, float]]:
+    """Add positions along the curved boundary for the complete rectangle."""
+    cx, cy = felt.center().x(), felt.center().y()
+    rx, ry = felt.width() / 2, felt.height() / 2
+    candidates: list[tuple[float, float]] = []
+    if rx <= 0 or ry <= 0:
+        return candidates
+    for y in ys | {cy}:
+        vertical = (abs(y - cy) + height / 2) / ry
+        if vertical >= 1:
+            continue
+        dx = rx * sqrt(1 - vertical * vertical) - width / 2 - 1
+        if dx >= 0:
+            candidates.extend((x, y) for x in (cx - dx, cx + dx, max(cx - dx, min(anchor.x(), cx + dx))))
+    for x in xs | {cx}:
+        horizontal = (abs(x - cx) + width / 2) / rx
+        if horizontal >= 1:
+            continue
+        dy = ry * sqrt(1 - horizontal * horizontal) - height / 2 - 1
+        if dy >= 0:
+            candidates.extend((x, y) for y in (cy - dy, cy + dy, max(cy - dy, min(anchor.y(), cy + dy))))
+    return candidates
+
+
+def _place_amount(anchor: QPointF, width: float, height: float, avoid: tuple[QRectF, ...], available: QRectF | None, felt: QRectF | None) -> QRectF:
     """Find a free rectangle; never fall back to an obstructed anchor."""
     obstacles = [region.adjusted(-4, -4, 4, 4) for region in avoid]
     offsets = sorted(
@@ -41,10 +79,14 @@ def _place_amount(anchor: QPointF, width: float, height: float, avoid: tuple[QRe
     if available is not None:
         xs.update((available.left() + width / 2, available.right() - width / 2))
         ys.update((available.top() + height / 2, available.bottom() - height / 2))
-    candidates.extend(sorted(((x, y) for x in xs for y in ys), key=lambda p: (p[0] - anchor.x()) ** 2 + (p[1] - anchor.y()) ** 2))
+    edge_candidates = [(x, y) for x in xs for y in ys]
+    if felt is not None:
+        edge_candidates.extend(_felt_candidates(anchor, width, height, felt, xs, ys))
+    candidates.extend(edge_candidates)
+    candidates.sort(key=lambda p: (p[0] - anchor.x()) ** 2 + (p[1] - anchor.y()) ** 2)
     for x, y in candidates:
         bounds = QRectF(x - width / 2, y - height / 2, width, height)
-        if (available is None or available.contains(bounds)) and all(not bounds.intersects(region) for region in obstacles):
+        if (available is None or available.contains(bounds)) and _inside_felt(bounds, felt) and all(not bounds.intersects(region) for region in obstacles):
             return bounds
     return QRectF()
 
@@ -60,6 +102,7 @@ def draw_chip_amount(
     max_width: float = 240,
     avoid: tuple[QRectF, ...] = (),
     available: QRectF | None = None,
+    felt: QRectF | None = None,
 ) -> tuple[QRectF, list[ChipStack]]:
     stacks = chip_stacks(amount, quantum) if show_chips else []
     painter.save()
@@ -71,12 +114,23 @@ def draw_chip_amount(
     stride = min(30, max(12, (max_width - label_width - gap - diameter) / max(1, len(stacks) - 1)))
     chips_width = diameter + (len(stacks) - 1) * stride if stacks else 0
     width = chips_width + gap + label_width
-    bounds = _place_amount(anchor, width, label_height, avoid, available)
+    bounds = _place_amount(anchor, width, label_height, avoid, available, felt)
+    label_font = painter.font()
+    if bounds.isNull() and not stacks:
+        # Dense tables may have room for the exact value but not the regular
+        # padding/type size. Keep every amount legible rather than dropping it.
+        while bounds.isNull() and label_font.pointSizeF() > 9:
+            label_font.setPointSizeF(max(9, label_font.pointSizeF() - 1))
+            painter.setFont(label_font)
+            label_width = painter.fontMetrics().horizontalAdvance(text) + 12
+            label_height = painter.fontMetrics().height() + 6
+            width = label_width
+            bounds = _place_amount(anchor, width, label_height, avoid, available, felt)
     if bounds.isNull():
         painter.restore()
         if stacks:
             # Prefer the exact amount over decorative stacks in a crowded view.
-            bounds, _ = draw_chip_amount(painter, amount, anchor, text, quantum, show_chips=False, avoid=avoid, available=available)
+            bounds, _ = draw_chip_amount(painter, amount, anchor, text, quantum, show_chips=False, avoid=avoid, available=available, felt=felt)
         return bounds, stacks
     anchor = bounds.center()
     left = bounds.left()
@@ -99,7 +153,7 @@ def draw_chip_amount(
             inset = top.adjusted(5, 3, -5, -3)
             painter.drawEllipse(inset)
         _draw_denomination(painter, stack, top, color)
-    painter.setFont(replay_font("DejaVu Sans", 9, QFont.Weight.DemiBold))
+    painter.setFont(label_font)
     label = QRectF(left + chips_width + gap, anchor.y() - label_height / 2, label_width, label_height)
     painter.setPen(QPen(QColor("#43505c"), 1))
     painter.setBrush(QColor(12, 20, 27, 235))

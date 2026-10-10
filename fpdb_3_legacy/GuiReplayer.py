@@ -1038,10 +1038,10 @@ class GuiReplayer(QWidget):
                         quantum = min(quantum, Decimal(1).scaleb(amount.normalize().as_tuple().exponent))
         self.chip_quantum = quantum
 
-    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=(), available=None) -> None:
+    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=(), available=None, felt=None) -> None:
         text = f"{caption}: {self._format_amount(amount)}" if caption else self._format_amount(amount)
         bounds, stacks = draw_chip_amount(
-            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid, available=available,
+            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid, available=available, felt=felt,
         )
         breakdown = "; ".join(f"{stack.count} × {self._format_amount(stack.denomination)}" for stack in stacks)
         tooltip = f"{text}\n{breakdown}" if breakdown else text
@@ -2176,13 +2176,15 @@ class GuiReplayer(QWidget):
                 )
                 getattr(self, "_seat_overlay_regions", []).append(QRectF(lbl_rect))
 
+    def _draw_pots(self, painter, frame, layout) -> None:
+        """Place central amounts after cards, badges and dealers are reserved."""
         pots = frame.pots if frame.pots else [("Pot", frame.pot)]
         pot_total = sum(amount for _label, amount in pots)
         if pot_total <= 0:
             # Pot already collected (hand conclusion): nothing to display.
             return
         pot_rect = layout.pot_rect
-        if not board_cards:
+        if not getattr(self, "_board_regions", []):
             pot_rect = QRectF(
                 layout.table_rect.center().x() - 88,
                 layout.table_rect.center().y() + 14,
@@ -2192,9 +2194,11 @@ class GuiReplayer(QWidget):
         state = self.states[self.stateSlider.value()]
         settled = replay_settled_pots(state)
         if not settled:
-            self._draw_chip_amount(painter, pot_total, pot_rect.center(), _("Total pot"), show_chips=False)
+            self._draw_chip_amount(painter, pot_total, pot_rect.center(), _("Total pot"), show_chips=False,
+                                   felt=layout.table_rect.adjusted(14, 14, -14, -14), avoid=self._chip_obstacles(layout))
         elif len(settled) == 1:
-            self._draw_chip_amount(painter, settled[0][1], pot_rect.center(), _("Pot"))
+            self._draw_chip_amount(painter, settled[0][1], pot_rect.center(), _("Pot"),
+                                   felt=layout.table_rect.adjusted(14, 14, -14, -14), avoid=self._chip_obstacles(layout))
         else:
             row_height = 36
             first_y = min(
@@ -2208,7 +2212,8 @@ class GuiReplayer(QWidget):
                     first_y + (index // 2) * row_height,
                 )
                 caption = _("Main") if label == "Main pot" else label.replace("Side pot", _("Side"))
-                self._draw_chip_amount(painter, amount, anchor, caption, max_width=layout.table_rect.width() / 3)
+                self._draw_chip_amount(painter, amount, anchor, caption, max_width=layout.table_rect.width() / 3,
+                                       felt=layout.table_rect.adjusted(14, 14, -14, -14), avoid=self._chip_obstacles(layout))
 
     def _draw_player(
         self,
@@ -2407,10 +2412,8 @@ class GuiReplayer(QWidget):
             painter.drawText(dealer_rect, Qt.AlignmentFlag.AlignCenter, "D")
             getattr(self, "_seat_overlay_regions", []).append(QRectF(dealer_rect))
 
-    def _draw_player_bet(self, painter, player, seat, layout) -> None:
-        """Paint bets only after all seats have reserved their visible overlays."""
-        if not player.chips:
-            return
+    def _chip_obstacles(self, layout) -> tuple[QRectF, ...]:
+        """One set of protected regions for bets and collected/central pots."""
         lift = int(layout.card_height * .18) + 4
         avoid = [region for other in layout.seats.values() for region in (
             other.cards_rect.adjusted(-2, -lift, 2, 4), other.panel_rect.adjusted(0, 0, 0, 3),
@@ -2420,10 +2423,17 @@ class GuiReplayer(QWidget):
         avoid.extend(getattr(self, "_board_regions", []))
         if not layout.timeline_rect.isNull():
             avoid.append(layout.timeline_rect)
+        return tuple(avoid)
+
+    def _draw_player_bet(self, painter, player, seat, layout) -> None:
+        """Paint bets only after all seats have reserved their visible overlays."""
+        if not player.chips:
+            return
         self._draw_chip_amount(
             painter, player.chips, seat.bet_rect.center(),
             _("Won") if player.action == "collected" else "",
-            max_width=200, avoid=tuple(avoid),
+            max_width=200, avoid=self._chip_obstacles(layout),
+            felt=layout.table_rect.adjusted(14, 14, -14, -14),
             available=QRectF(8, HEADER_HEIGHT + 2, self.width() - 16,
                              self.height() - CONTROL_RESERVED_HEIGHT - HEADER_HEIGHT - 4),
         )
@@ -2837,6 +2847,7 @@ class GuiReplayer(QWidget):
             seat = layout.seats.get(player.name)
             if seat is not None:
                 self._draw_player(painter, player, seat, layout, frame.street, is_final_frame)
+        self._draw_pots(painter, frame, layout)
         for player in frame.players:
             seat = layout.seats.get(player.name)
             if seat is not None:

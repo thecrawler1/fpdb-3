@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from PySide6.QtCore import QPoint, QRectF, QSettings, Qt
-from PySide6.QtGui import QContextMenuEvent, QFont, QFontMetrics, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QContextMenuEvent, QFont, QFontMetrics, QPainterPath, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QMenu, QTableView, QWidget
 
 from fpdb_3_legacy import replayer_audio
@@ -425,6 +425,15 @@ def test_all_bets_clear_visible_overlays_and_stay_above_controls(qtbot, history_
         replayer.stateSlider.setValue(index)
         replayer._clear_card_animations()
         replayer.grab()
+        players = order_players_clockwise(replayer._frame_from_state(state).players, replayer.Heroes)
+        layout = build_replay_layout(replayer.width(), replayer.height(), [p.name for p in players], replayer.Heroes, "holdem")
+        felt = QPainterPath()
+        felt.addEllipse(layout.table_rect.adjusted(14, 14, -14, -14))
+        assert all(not bounds.isNull() and felt.contains(bounds) for bounds, _ in replayer._chip_regions), (size, big_blinds, index)
+        assert all(
+            not bounds.intersects(region)
+            for bounds, _ in replayer._chip_regions for region in replayer._seat_overlay_regions
+        ), (size, big_blinds, index)
         bet_count = sum(bool(player.chips) for player in state.players.values())
         if not bet_count:
             continue
@@ -437,8 +446,7 @@ def test_all_bets_clear_visible_overlays_and_stay_above_controls(qtbot, history_
             assert bounds.bottom() < replayer.height() - CONTROL_RESERVED_HEIGHT
             assert bounds.left() >= 0 and bounds.right() <= replayer.width()
         for i, (bounds, _text) in enumerate(replayer._chip_regions):
-            if i >= len(replayer._chip_regions) - bet_count:
-                assert all(not bounds.intersects(other) for other, _ in replayer._chip_regions[:i])
+            assert all(not bounds.intersects(other) for other, _ in replayer._chip_regions[:i])
 
 
 @pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])
