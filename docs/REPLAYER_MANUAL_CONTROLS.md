@@ -1,7 +1,8 @@
 # Replayer manual: controles, big blinds e fichas
 
 O layout atual remove o header antigo e a timeline lateral e mostra as métricas
-de decisão no topo, com os comandos embaixo; veja [REPLAYER_DECISION_STRIP.md](REPLAYER_DECISION_STRIP.md).
+de decisão no topo, com os comandos embaixo. A barra mostra somente **Pot odds**
+e **SPR**, com títulos fixos; veja [REPLAYER_TWO_METRICS.md](REPLAYER_TWO_METRICS.md).
 
 ## Mudanças solicitadas
 

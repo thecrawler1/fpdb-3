@@ -1,5 +1,9 @@
 # Replayer simplificado: mesa e faixa de decisão
 
+Esta página registra a versão anterior com três colunas. A barra atual foi
+reduzida a dois títulos fixos, **Pot odds** e **SPR**; veja
+[Barra mínima](REPLAYER_TWO_METRICS.md) para o comportamento e as capturas atuais.
+
 ## Organização
 
 O replayer mostra a faixa de decisão no topo, a mesa e os comandos embaixo.
