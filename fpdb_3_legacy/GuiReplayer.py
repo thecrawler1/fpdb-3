@@ -80,8 +80,8 @@ CARD_HEIGHT = 90
 CARD_WIDTH = 70
 PLAYER_PANEL_WIDTH = 220
 PLAYER_PANEL_HEIGHT = 72
-CONTROL_RESERVED_HEIGHT = 228
-HEADER_HEIGHT = 12  # Only a top inset: the replayer has no header.
+CONTROL_RESERVED_HEIGHT = 148
+HEADER_HEIGHT = 92  # Decision strip plus clearance; no legacy header.
 CARD_REFERENCE_RESERVED_HEIGHT = 252  # Original header and control reservation.
 TIMELINE_WIDTH = 280
 TIMELINE_MIN_WINDOW_WIDTH = 1500
@@ -946,14 +946,14 @@ class GuiReplayer(QWidget):
         self.actionsButton.setShortcut("A")
         self.actionsButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.actionsButton.clicked.connect(self.actions_clicked)
+        self.decisionPanel = DecisionPanel(self)
+        self.replayBox.addWidget(self.decisionPanel)
         self.replayBox.addStretch()
         self.controls = QWidget(self)
         self.controls.setFixedHeight(CONTROL_RESERVED_HEIGHT - 14)
         controls_layout = QVBoxLayout(self.controls)
         controls_layout.setContentsMargins(8, 0, 8, 0)
         controls_layout.setSpacing(4)
-        self.decisionPanel = DecisionPanel(self.controls)
-        controls_layout.addWidget(self.decisionPanel)
         controls_layout.addWidget(self.stateSlider)
         navigation = QHBoxLayout()
         navigation.setSpacing(24)

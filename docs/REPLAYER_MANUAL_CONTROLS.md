@@ -1,7 +1,7 @@
 # Replayer manual: controles, big blinds e fichas
 
-O layout atual remove o header e a timeline lateral e mostra as métricas de
-decisão na área de comandos; veja [REPLAYER_DECISION_STRIP.md](REPLAYER_DECISION_STRIP.md).
+O layout atual remove o header antigo e a timeline lateral e mostra as métricas
+de decisão no topo, com os comandos embaixo; veja [REPLAYER_DECISION_STRIP.md](REPLAYER_DECISION_STRIP.md).
 
 ## Mudanças solicitadas
 

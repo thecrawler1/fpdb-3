@@ -2,12 +2,12 @@
 
 ## Organização
 
-O replayer mostra somente a mesa e a área de comandos. O header visual foi
-removido integralmente: modalidade/stake, site, ID da mão, resumo de ação,
+O replayer mostra a faixa de decisão no topo, a mesa e os comandos embaixo.
+O header visual antigo foi removido integralmente: modalidade/stake, site, ID da mão, resumo de ação,
 contagem de passos, dicas e os botões Actions/Share/Solver review. A timeline
 lateral também deixa de ocupar a janela larga.
 
-A faixa de decisão fica acima do slider e da navegação, em três posições fixas:
+A faixa de decisão fica no topo da janela, em três posições fixas:
 
 1. **Contexto:** call, bet ou investimento novo do raise, com sizing em % do pote.
 2. **Decisão:** pot odds ao enfrentar uma aposta; MDF do adversário e fold equity
@@ -71,13 +71,15 @@ Todos os cálculos usam somente o estado exibido e os estados anteriores.
 
 - **242 testes direcionados aprovados**, incluindo regressões de controles,
   cartas, fichas, BB, fold, variantes, compartilhamento e revisão de mãos.
+- A mudança da faixa para o topo foi validada com **144 testes direcionados**
+  de layout, integração Qt e posicionamento de fichas; capturas atualizadas e Ruff aprovado.
 - Dez casos aritméticos verificam SPR no flop/turn/river, estabilidade durante
   apostas, pot odds, MDF, raises, all-ins, side money, multiway, folds e ausência
   de informação futura.
 - Teste Qt confirma as três apresentações do turn: SPR sem decisão, MDF após
   bet e pot odds ao enfrentar aposta, sem executar cálculos de equidade de cartas.
 - Testes confirmam que header e timeline não são desenhados e a faixa pertence
-  à área de comandos. Ruff e mypy aprovados nos módulos alterados.
+  ao topo da janela, acima da mesa. Ruff e mypy aprovados nos módulos alterados.
 - **25 mãos reais recentes**, **944 frames** e **2.306 grupos de aposta/pote**
   reconferidos: todos dentro do feltro e sem colisão com os elementos reservados.
 - Capturas públicas em 1280×720, 1600×900 e 1260×1380; os três cenários de
@@ -90,7 +92,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python tools/capture_replayer_review.py \
   --pokerstars-path "/caminho/absoluto/para/PokerStars"
 ```
 
-![Pot odds de 25% e SPR do turn na área de comandos](images/replayer-decisions/pot-odds-turn.png)
+![Pot odds de 25% e SPR do turn no topo da janela](images/replayer-decisions/pot-odds-turn.png)
 
 ![MDF puro e fold equity mínima após aposta de meio pote](images/replayer-decisions/mdf-turn.png)
 

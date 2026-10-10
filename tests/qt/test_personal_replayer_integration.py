@@ -241,7 +241,9 @@ def test_wide_replayer_has_only_table_and_commands_without_header_or_timeline(qt
     replayer.grab()
     assert not replayer._timeline_hit_regions
     assert replayer.decisionPanel.isVisible()
-    assert replayer.decisionPanel.parent() is replayer.controls
+    assert replayer.decisionPanel.parent() is replayer
+    assert replayer.decisionPanel.geometry().bottom() < replayer.controls.geometry().top()
+    assert replayer.decisionPanel.geometry().top() <= 10
     for mock in removed:
         mock.assert_not_called()
 
@@ -271,7 +273,7 @@ def test_command_metrics_show_turn_spr_call_odds_and_hero_mdf_without_equity_loo
     assert captured[2][0].pot_odds_pct == 25
     assert "SPR · TURN" in captured[0][1][2]
     assert "95 BB" in captured[2][1][2]
-    assert all(replayer.controls.rect().contains(label.geometry().translated(replayer.decisionPanel.pos()))
+    assert all(replayer.rect().contains(label.geometry().translated(replayer.decisionPanel.pos()))
                for label in replayer.decisionPanel.labels)
     equity.assert_not_called()
 
