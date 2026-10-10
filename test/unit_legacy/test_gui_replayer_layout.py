@@ -165,14 +165,15 @@ def test_players_are_ordered_by_seat_and_rotated_to_hero():
     assert [player.name for player in ordered] == ["hero", "seat4", "seat5", "seat1"]
 
 
-def test_layout_reserves_header_controls_and_timeline():
+def test_layout_reserves_commands_and_uses_full_width_without_header_or_timeline():
     players = [f"p{i}" for i in range(6)]
     layout = build_replay_layout(1600, 900, players, hero_name="p3")
     control_top = 900 - CONTROL_RESERVED_HEIGHT
 
     assert layout.table_rect.top() >= HEADER_HEIGHT
     assert layout.table_rect.bottom() <= control_top
-    assert not layout.timeline_rect.isNull()
+    assert layout.timeline_rect.isNull()
+    assert layout.table_rect.center().x() == 800
     assert set(layout.seats) == set(players)
     for seat in layout.seats.values():
         assert seat.panel_rect.top() >= HEADER_HEIGHT
@@ -265,13 +266,13 @@ def test_true_rit_navigation_keeps_numbered_runout_streets() -> None:
     assert replay_button_streets(hand) == streets[1:]
 
 
-def test_timeline_appears_only_when_width_allows_readability():
+def test_simplified_table_never_reserves_a_sidebar_even_in_wide_windows():
     compact = build_replay_layout(TIMELINE_MIN_WINDOW_WIDTH - 1, 900, [f"p{i}" for i in range(6)])
     wide = build_replay_layout(TIMELINE_MIN_WINDOW_WIDTH, 900, [f"p{i}" for i in range(6)])
 
     assert compact.timeline_rect.isNull()
-    assert not wide.timeline_rect.isNull()
-    assert wide.timeline_rect.width() >= 260
+    assert wide.timeline_rect.isNull()
+    assert wide.table_rect.center().x() == TIMELINE_MIN_WINDOW_WIDTH / 2
 
 
 def test_updateforaction_flags_allin_when_stack_empties():

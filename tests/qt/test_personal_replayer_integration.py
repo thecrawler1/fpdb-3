@@ -49,6 +49,7 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
     replayer.play_hand(0)
     assert replayer.shareButton.isEnabled()
     assert replayer.reviewButton.isEnabled()
+    assert replayer.shareButton.isHidden() and replayer.reviewButton.isHidden() and replayer.actionsButton.isHidden()
     assert replayer.soundCheck.isChecked()
 
     sounds = []
@@ -208,9 +209,8 @@ def test_compact_history_access_and_exact_seek(qtbot, history_replayer, size):
     replayer = history_replayer
     replayer.resize(*size)
     qtbot.wait(1)
-    button_rect = replayer.actionsButton.rect().translated(replayer.actionsButton.mapTo(replayer, QPoint(0, 0)))
-    assert replayer.rect().contains(button_rect)
-    qtbot.mouseClick(replayer.actionsButton, Qt.MouseButton.LeftButton)
+    assert replayer.actionsButton.isHidden()
+    qtbot.keyClick(replayer, Qt.Key.Key_A)
     assert replayer.historyDialog.isVisible()
     phase_row = next(
         row for row in range(replayer.historyList.count())
@@ -230,15 +230,50 @@ def test_compact_history_access_and_exact_seek(qtbot, history_replayer, size):
     replayer.historyDialog.close()
 
 
-def test_wide_timeline_seeks_to_original_state(qtbot, history_replayer):
+def test_wide_replayer_has_only_table_and_commands_without_header_or_timeline(qtbot, history_replayer, monkeypatch):
     replayer = history_replayer
     replayer.resize(1600, 900)
     replayer.end_clicked(False)
     qtbot.wait(1)
+    removed = [MagicMock() for _ in range(3)]
+    for name, mock in zip(("_draw_header", "_draw_summary", "_draw_timeline"), removed):
+        monkeypatch.setattr(replayer, name, mock)
     replayer.grab()
-    rect, index = next((rect, index) for rect, index in replayer._timeline_hit_regions if index == 11)
-    qtbot.mouseClick(replayer, Qt.MouseButton.LeftButton, pos=rect.center().toPoint())
-    assert replayer.stateSlider.value() == index
+    assert not replayer._timeline_hit_regions
+    assert replayer.decisionPanel.isVisible()
+    assert replayer.decisionPanel.parent() is replayer.controls
+    for mock in removed:
+        mock.assert_not_called()
+
+
+def test_command_metrics_show_turn_spr_call_odds_and_hero_mdf_without_equity_lookup(
+    qtbot, qapp, history_replayer, monkeypatch, tmp_path
+):
+    from tools.capture_replayer_review import capture_decision_cases
+
+    replayer = history_replayer
+    replayer.bigBlindCheck.setChecked(True)
+    equity = MagicMock(side_effect=AssertionError("Decision strip must not estimate card equity"))
+    monkeypatch.setattr("fpdb_3_legacy.GuiReplayer.calculate_equity", equity)
+    captured = []
+    grab = replayer.grab
+
+    def record():
+        image = grab()
+        captured.append((replayer.decisionPanel.metrics, [label.text() for label in replayer.decisionPanel.labels]))
+        return image
+
+    monkeypatch.setattr(replayer, "grab", record)
+    capture_decision_cases(replayer, replayer.replay_model.hand, qapp, tmp_path)
+    assert [metrics.mode for metrics, _ in captured] == ["neutral", "bet", "call"]
+    assert all(metrics.street == "TURN" and metrics.spr == (Decimal("9.5"),) for metrics, _ in captured)
+    assert round(captured[1][0].mdf_pct, 1) == Decimal("66.7")
+    assert captured[2][0].pot_odds_pct == 25
+    assert "SPR · TURN" in captured[0][1][2]
+    assert "95 BB" in captured[2][1][2]
+    assert all(replayer.controls.rect().contains(label.geometry().translated(replayer.decisionPanel.pos()))
+               for label in replayer.decisionPanel.labels)
+    equity.assert_not_called()
 
 
 def test_transport_press_feedback_preserves_hit_area_and_release_click(qtbot, history_replayer):

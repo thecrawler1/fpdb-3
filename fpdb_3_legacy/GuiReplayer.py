@@ -66,6 +66,8 @@ from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.replayer_audio import ReplayerAudio, transition_sound
 from fpdb_3_legacy.replayer_chip_renderer import draw_chip_amount
 from fpdb_3_legacy.replayer_controls import ReplayControlButton
+from fpdb_3_legacy.replayer_decision import HeroDecision, hero_decision
+from fpdb_3_legacy.replayer_decision_panel import DecisionPanel
 from fpdb_3_legacy.replayer_style import REPLAYER_STYLE, replay_font
 
 # import L10n
@@ -78,8 +80,8 @@ CARD_HEIGHT = 90
 CARD_WIDTH = 70
 PLAYER_PANEL_WIDTH = 220
 PLAYER_PANEL_HEIGHT = 72
-CONTROL_RESERVED_HEIGHT = 148
-HEADER_HEIGHT = 144
+CONTROL_RESERVED_HEIGHT = 228
+HEADER_HEIGHT = 12  # Only a top inset: the replayer has no header.
 CARD_REFERENCE_RESERVED_HEIGHT = 252  # Original header and control reservation.
 TIMELINE_WIDTH = 280
 TIMELINE_MIN_WINDOW_WIDTH = 1500
@@ -625,7 +627,7 @@ def build_replay_layout(
 ) -> ReplayLayout:
     """Compute a responsive table layout independent from the old fixed pixels."""
     usable_bottom = height - CONTROL_RESERVED_HEIGHT
-    has_timeline = width >= TIMELINE_MIN_WINDOW_WIDTH
+    has_timeline = False  # The visible replay is exclusively table + commands.
     timeline_width = min(340, max(260, int(width * 0.16))) if has_timeline else 0
     right_reserved = timeline_width + TABLE_MARGIN * 2 if has_timeline else TABLE_MARGIN
     table_area_width = max(360, width - TABLE_MARGIN - right_reserved)
@@ -915,7 +917,8 @@ class GuiReplayer(QWidget):
         # The hand being replayed, for sharing; an OFC replay has none.
         self.shared_hand: Any = None
         self.shared_hero: str | None = None
-        self.shareButton = QPushButton(_("Share..."))
+        self.shareButton = QPushButton(_("Share..."), self)
+        self.shareButton.hide()
         self.shareButton.setToolTip(_("Copy or save this hand as text, Markdown or forum code"))
         self.shareButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.shareButton.setEnabled(False)
@@ -924,7 +927,8 @@ class GuiReplayer(QWidget):
         # Solver review of the hand's preflop in PreflopAdvisor (#328); the
         # database id is kept because the loaded hand does not carry it.
         self.shared_hand_id: int | None = None
-        self.reviewButton = QPushButton(_("Solver review..."))
+        self.reviewButton = QPushButton(_("Solver review..."), self)
+        self.reviewButton.hide()
         self.reviewButton.setToolTip(_("Send this hand's preflop decisions to PreflopAdvisor"))
         self.reviewButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.reviewButton.setEnabled(False)
@@ -936,21 +940,20 @@ class GuiReplayer(QWidget):
 
         self.headerBox = QHBoxLayout()
         self.headerBox.addStretch()
-        self.actionsButton = QPushButton(_("Actions"))
+        self.actionsButton = QPushButton(_("Actions"), self)
+        self.actionsButton.hide()
         self.actionsButton.setToolTip(_("Open action history (A); select an entry to seek"))
         self.actionsButton.setShortcut("A")
         self.actionsButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.actionsButton.clicked.connect(self.actions_clicked)
-        self.headerBox.addWidget(self.actionsButton)
-        self.headerBox.addWidget(self.shareButton)
-        self.headerBox.addWidget(self.reviewButton)
-        self.replayBox.addLayout(self.headerBox)
         self.replayBox.addStretch()
         self.controls = QWidget(self)
         self.controls.setFixedHeight(CONTROL_RESERVED_HEIGHT - 14)
         controls_layout = QVBoxLayout(self.controls)
         controls_layout.setContentsMargins(8, 0, 8, 0)
         controls_layout.setSpacing(4)
+        self.decisionPanel = DecisionPanel(self.controls)
+        controls_layout.addWidget(self.decisionPanel)
         controls_layout.addWidget(self.stateSlider)
         navigation = QHBoxLayout()
         navigation.setSpacing(24)
@@ -1365,7 +1368,7 @@ class GuiReplayer(QWidget):
         )
 
     def _ofc_table_rect(self) -> QRectF:
-        right_margin = TIMELINE_WIDTH + 68 if self.width() >= TIMELINE_MIN_WINDOW_WIDTH else 28
+        right_margin = 28
         return QRectF(
             28,
             HEADER_HEIGHT,
@@ -1613,8 +1616,7 @@ class GuiReplayer(QWidget):
         ofc_hand = self.replay_model.hand
         state = self.states[self.stateSlider.value()]
         self._draw_ofc_scene(painter, ofc_hand, state)
-        self._draw_ofc_header(painter)
-        self._draw_ofc_timeline(painter, state)
+        self.decisionPanel.display(HeroDecision(), self._format_amount)
 
     def _build_replay_model(self, hand) -> ReplayModel:
         states = []
@@ -2838,8 +2840,7 @@ class GuiReplayer(QWidget):
         is_final_frame = self.stateSlider.value() == self.stateSlider.maximum()
 
         self._draw_table(painter, layout)
-        self._draw_header(painter)
-        self._draw_summary(painter, frame, layout, self.stateSlider.value())
+        self._update_decision_strip()
         self._record_board_cards = True
         try:
             self._draw_board(painter, frame, layout)
@@ -2854,7 +2855,11 @@ class GuiReplayer(QWidget):
             seat = layout.seats.get(player.name)
             if seat is not None:
                 self._draw_player_bet(painter, player, seat, layout)
-        self._draw_timeline(painter, layout)
+        self._timeline_hit_regions = []
+
+    def _update_decision_strip(self) -> None:
+        metrics = hero_decision(self.states, self.stateSlider.value(), self.Heroes)
+        self.decisionPanel.display(metrics, self._format_amount)
 
     def play_hand(self, handidx) -> None:  # noqa: F811
         if handidx < 0 or handidx >= len(self.handlist):
@@ -3067,6 +3072,8 @@ class GuiReplayer(QWidget):
         elif event.key() == Qt.Key.Key_Down:
             if self.handidx > 0:
                 self.play_hand(self.handidx - 1)
+        elif event.key() == Qt.Key.Key_A:
+            self.actions_clicked()
         else:
             QWidget.keyPressEvent(self, event)
 

@@ -88,6 +88,38 @@ def capture_bet_cases(replayer, hand, app, output: Path) -> None:
         replayer.grab().save(str(output / f"turn-bets-{width}.png"))
 
 
+def capture_decision_cases(replayer, hand, app, output: Path) -> None:
+    """Heads-up turn: 10 BB pot, 95 BB effective, facing/betting half pot."""
+    from fpdb_3_legacy.GuiReplayer import TableState
+
+    review = copy.copy(hand)
+    review.players = [[p[0], p[1], str(Decimal(p[2]) / 100), *p[3:]] for p in hand.players]
+    review.gametype = dict(hand.gametype, bb=".01")
+    review.bb = Decimal(".01")
+    review.board = {"FLOP": ["6d", "2h", "Ts"], "TURN": ["8c"], "RIVER": []}
+    initial = TableState(review)
+    initial.startPhase("FLOP")
+    initial.startPhase("TURN")
+    for name, player in initial.players.items():
+        if name in {"Hero", "Player4"}:
+            player.stack -= Decimal(".05")
+        else:
+            player.folded, player.action = True, "folds"
+    initial.pot = initial.newpot = Decimal(".10")
+    bet = copy.deepcopy(initial)
+    bet.updateForAction(("Hero", "bets", Decimal(".05")))
+    call = copy.deepcopy(initial)
+    call.updateForAction(("Player4", "bets", Decimal(".05")))
+    replayer.replay_model.hand = review
+    replayer._configure_replay_units(review)
+    for label, current in (("spr-turn", initial), ("mdf-turn", bet), ("pot-odds-turn", call)):
+        replayer.states = replayer.replay_model.states = [initial, current]
+        replayer.stateSlider.setMaximum(1)
+        replayer.stateSlider.setValue(1)
+        settle_capture(replayer, app, 1280, 720)
+        replayer.grab().save(str(output / f"{label}.png"))
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
@@ -95,6 +127,7 @@ def parse_args(argv=None):
     parser.add_argument("--side-pots", action="store_true", help="include a synthetic, conserved two-pot scenario")
     parser.add_argument("--polish-cases", action="store_true", help="include portrait and controlled fold frames")
     parser.add_argument("--bet-cases", action="store_true", help="include the five-handed turn with 12 BB facing 24 BB")
+    parser.add_argument("--decision-cases", action="store_true", help="include HU turn SPR, half-pot MDF and call odds")
     parser.add_argument("--pokerstars-path", type=Path, help="read complete card faces from this local client installation")
     return parser.parse_args(argv)
 
@@ -196,6 +229,8 @@ def main(argv=None) -> int:
             capture_side_pots(replayer, hand, app, output)
         if args.bet_cases:
             capture_bet_cases(replayer, hand, app, output)
+        if args.decision_cases:
+            capture_decision_cases(replayer, hand, app, output)
         replayer.close()
         app.processEvents()
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
