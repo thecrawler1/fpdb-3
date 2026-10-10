@@ -140,11 +140,12 @@ def draw_chip_amount(
     width = chips_width + gap + label_width
     bounds = _place_amount(anchor, width, label_height, avoid, available, felt)
     label_below = False
-    if bounds.isNull() and stacks:
+    if stacks and (bounds.isNull() or width > max_width):
         # Keep separated denomination piles visible in narrow spaces by putting
         # their total below them, instead of squeezing their columns together.
-        bounds = _place_amount(anchor, max(chips_width, label_width), 38 + 6 + label_height, avoid, available, felt)
-        label_below = not bounds.isNull()
+        below = _place_amount(anchor, max(chips_width, label_width), 38 + 6 + label_height, avoid, available, felt)
+        if not below.isNull() and (bounds.isNull() or (below.center() - anchor).manhattanLength() < (bounds.center() - anchor).manhattanLength()):
+            bounds, label_below = below, True
     label_font = painter.font()
     if bounds.isNull() and not stacks:
         # Dense tables may have room for the exact value but not the regular
