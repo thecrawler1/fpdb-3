@@ -25,11 +25,12 @@ class DbWorker(QThread):
     # Arguments: (error_message)
     error = Signal(str)
 
-    def __init__(self, db_or_cursor, query_name: str, query_sql: str) -> None:
+    def __init__(self, db_or_cursor, query_name: str, query_sql: str, params: tuple | None = None) -> None:
         super().__init__()
         self.db_or_cursor = db_or_cursor
         self.query_name = query_name
         self.query_sql = query_sql
+        self.params = params
 
     def run(self) -> None:  # noqa: PLR0915
         import logging
@@ -44,7 +45,10 @@ class DbWorker(QThread):
                 t0 = time.time()
                 cursor = conn_obj.cursor() if hasattr(conn_obj, "cursor") else db
                 try:
-                    cursor.execute(self.query_sql)
+                    if self.params is None:
+                        cursor.execute(self.query_sql)
+                    else:
+                        cursor.execute(self.query_sql, self.params)
                     t1 = time.time()
                     res = cursor.fetchall()
                     t2 = time.time()
