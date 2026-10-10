@@ -43,6 +43,7 @@ def stud_replayer():
         showCards=SimpleNamespace(isChecked=lambda: True),
         currency_code="USD",
         height=lambda: 900,
+        width=lambda: 1600,
         cardwidth=70,
         cardheight=100,
         deckType="simple",
@@ -174,6 +175,7 @@ def test_low_winner_render_highlights_five_cards_and_dims_other_two(stud_replaye
     painter = Mock()
     painter.fontMetrics.return_value.horizontalAdvance.side_effect = lambda text: len(text) * 7
     painter.fontMetrics.return_value.elidedText.side_effect = lambda text, *_args: text
+    painter.fontMetrics.return_value.boundingRect.return_value.height.return_value = 24
 
     GuiReplayer._draw_player(
         stud_replayer,

@@ -27,7 +27,18 @@ from typing import Any
 
 import defusedxml.minidom
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QHelpEvent, QImage, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QHelpEvent,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -65,8 +76,8 @@ log = get_logger("gui_replayer")
 
 CARD_HEIGHT = 90
 CARD_WIDTH = 70
-PLAYER_PANEL_WIDTH = 244
-PLAYER_PANEL_HEIGHT = 75
+PLAYER_PANEL_WIDTH = 220
+PLAYER_PANEL_HEIGHT = 72
 CONTROL_RESERVED_HEIGHT = 148
 HEADER_HEIGHT = 144
 CARD_REFERENCE_RESERVED_HEIGHT = 252  # Original header and control reservation.
@@ -669,14 +680,15 @@ def build_replay_layout(
     ry = table_rect.height() * 0.62
 
     panel_w = max(180, int(PLAYER_PANEL_WIDTH * card_scale))
-    panel_h = max(57, int(PLAYER_PANEL_HEIGHT * card_scale))
+    panel_h = max(60, int(PLAYER_PANEL_HEIGHT * card_scale))
 
-    num_cards = hidden_card_count(category) if category else 4
+    num_cards = max(hidden_card_count(category), visible_hole_card_count(category, None, final_frame=True)) if category else 4
     num_cards = max(2, num_cards)
     card_w = card_width + (num_cards - 1) * card_spacing
     card_h = card_height
 
-    panel_offset_y = int(24 * card_scale)
+    cluster_gap = max(4, int(6 * card_scale))
+    badge_reserve = 32
 
     for index, name in enumerate(ordered_names):
         anchor = seat_anchors(len(ordered_names))[index]
@@ -684,50 +696,40 @@ def build_replay_layout(
             table_rect.center().x() + anchor.x * rx,
             table_rect.center().y() + anchor.y * ry,
         )
-        panel_rect = QRectF(center.x() - panel_w / 2, center.y() + panel_offset_y, panel_w, panel_h)
-        cards_rect = QRectF(center.x() - card_w / 2, center.y() - card_h / 2, card_w, card_h)
-        if anchor.y > 0.6:
-            cards_rect.moveTop(center.y() - card_h - int(4 * card_scale))
-            panel_rect.moveTop(cards_rect.bottom() + int(6 * card_scale))
-        elif anchor.y < -0.6:
-            panel_rect.moveTop(center.y() - panel_h - int(36 * card_scale))
-            cards_rect.moveTop(panel_rect.bottom() + int(6 * card_scale))
-        elif anchor.x > 0:
-            panel_rect.moveLeft(center.x() - panel_w * 0.34)
-            cards_rect.moveLeft(panel_rect.center().x() - card_w / 2)
-            cards_rect.moveTop(panel_rect.y() - card_h - int(6 * card_scale))
-        elif anchor.x < 0:
-            panel_rect.moveLeft(center.x() - panel_w * 0.66)
-            cards_rect.moveLeft(panel_rect.center().x() - card_w / 2)
-            cards_rect.moveTop(panel_rect.y() - card_h - int(6 * card_scale))
-
-        panel_rect.moveTop(max(HEADER_HEIGHT + 6, min(panel_rect.y(), usable_bottom - panel_h - 10)))
-        cards_rect.moveTop(max(HEADER_HEIGHT + 6, min(cards_rect.y(), usable_bottom - card_h - 16)))
-        panel_rect.moveLeft(max(8, min(panel_rect.x(), width - right_reserved - panel_w - 8)))
-        cards_rect.moveLeft(max(8, min(cards_rect.x(), width - right_reserved - cards_rect.width() - 8)))
-        if panel_rect.intersects(cards_rect):
-            if anchor.y > 0.6:
-                cards_rect.moveBottom(panel_rect.top() - int(6 * card_scale))
-            elif anchor.y < -0.6:
-                cards_rect.moveTop(panel_rect.bottom() + int(6 * card_scale))
+        # Clamp the whole cluster, not its two parts independently. Every seat
+        # reads in the same order: cards, nickname, stack, optional status.
+        cluster_w = max(panel_w, card_w)
+        cluster_h = card_h + cluster_gap + panel_h
+        cluster_x = center.x() + anchor.x * panel_w * .16
+        cluster_x = max(8 + cluster_w / 2, min(cluster_x, width - right_reserved - 8 - cluster_w / 2))
+        cluster_top = center.y() - card_h - cluster_gap
+        cluster_top = max(
+            HEADER_HEIGHT + 6,
+            min(cluster_top, usable_bottom - cluster_h - badge_reserve - 10),
+        )
+        cards_rect = QRectF(cluster_x - card_w / 2, cluster_top, card_w, card_h)
+        panel_rect = QRectF(cluster_x - panel_w / 2, cards_rect.bottom() + cluster_gap, panel_w, panel_h)
+        if panel_rect.intersects(board_rect) and abs(anchor.x) > .1:
+            # At short, narrow sizes the header clamp can push a top-side
+            # plaque into the board's corners. Move its whole cluster outward.
+            if anchor.x < 0:
+                cluster_x = min(cluster_x, board_rect.left() - cluster_w / 2 - 8)
             else:
-                cards_rect.moveBottom(panel_rect.top() - int(6 * card_scale))
-        cards_rect.moveTop(max(HEADER_HEIGHT + 6, min(cards_rect.y(), usable_bottom - card_h - 16)))
-        cards_rect.moveLeft(panel_rect.center().x() - cards_rect.width() / 2)
-        cards_rect.moveLeft(max(8, min(cards_rect.x(), width - right_reserved - cards_rect.width() - 8)))
-        panel_rect.moveLeft(cards_rect.center().x() - panel_w / 2)
-        panel_rect.moveLeft(max(8, min(panel_rect.x(), width - right_reserved - panel_w - 8)))
+                cluster_x = max(cluster_x, board_rect.right() + cluster_w / 2 + 8)
+            cluster_x = max(8 + cluster_w / 2, min(cluster_x, width - right_reserved - 8 - cluster_w / 2))
+            cards_rect.moveLeft(cluster_x - card_w / 2)
+            panel_rect.moveLeft(cluster_x - panel_w / 2)
 
         bet_x = table_rect.center().x() + anchor.x * table_rect.width() * 0.26
         bet_y = table_rect.center().y() + anchor.y * table_rect.height() * 0.28
         if abs(anchor.y) < 0.35:
             bet_y += int(24 * card_scale) if index % 2 else int(-24 * card_scale)
         if abs(anchor.x) < 0.35:
-            bet_x += int(48 * card_scale) if index % 2 else int(-48 * card_scale)
+            bet_x += table_rect.width() * (.23 if anchor.y > 0 else .14)
         if anchor.y > 0.6:
             bet_y = min(bet_y, cards_rect.y() - int(24 * card_scale))
         elif anchor.y < -0.6:
-            bet_y = max(bet_y, cards_rect.bottom() + int(24 * card_scale))
+            bet_y = max(bet_y, panel_rect.bottom() + max(24, int(30 * card_scale)))
 
         dealer_x = table_rect.center().x() + anchor.x * table_rect.width() * 0.38
         dealer_y = table_rect.center().y() + anchor.y * table_rect.height() * 0.38
@@ -1860,16 +1862,34 @@ class GuiReplayer(QWidget):
             return
         painter.save()
         hidden = card in {"0", "0x"}
-        painter.setPen(QPen(QColor("#46505e" if hidden else "#d4d9df"), 1))
-        painter.setBrush(QColor("#303b48" if hidden else "#f0f2f4"))
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 5, 5)
+        paper = rect.adjusted(1, 1, -1, -2)
+        radius = max(3, rect.width() * .075)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 65))
+        painter.drawRoundedRect(paper.translated(0, 2), radius, radius)
+        shading = QLinearGradient(paper.topLeft(), paper.bottomRight())
+        shading.setColorAt(0, QColor("#3c4b59" if hidden else "#ffffff"))
+        shading.setColorAt(1, QColor("#25323f" if hidden else "#e8edf0"))
+        painter.setPen(QPen(QColor("#657585" if hidden else "#bac4cc"), 1))
+        painter.setBrush(shading)
+        painter.drawRoundedRect(paper, radius, radius)
         if hidden:
-            painter.setPen(QPen(QColor("#566575"), 1))
+            inset = paper.adjusted(4, 4, -4, -4)
+            pattern = QPainterPath()
+            pattern.addRoundedRect(inset, 2, 2)
+            painter.save()
+            painter.setClipPath(pattern)
+            painter.setPen(QPen(QColor(144, 166, 184, 38), .7))
+            step = max(5, int(rect.width() * .12))
+            for offset in range(-int(rect.height()), int(rect.width() + rect.height()), step):
+                painter.drawLine(QPointF(inset.left() + offset, inset.top()),
+                                 QPointF(inset.left() + offset + inset.height(), inset.bottom()))
+                painter.drawLine(QPointF(inset.left() + offset, inset.top()),
+                                 QPointF(inset.left() + offset - inset.height(), inset.bottom()))
+            painter.restore()
+            painter.setPen(QPen(QColor("#788b9c"), .8))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(rect.adjusted(5, 5, -5, -5), 3, 3)
-            painter.setPen(QColor("#a6b4c3"))
-            painter.setFont(replay_font("DejaVu Sans", max(8, int(rect.width() * 0.2)), QFont.Weight.Bold))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "FP")
+            painter.drawRoundedRect(inset, 2, 2)
         else:
             suit = card[-1]
             color, symbol = {
@@ -1878,12 +1898,28 @@ class GuiReplayer(QWidget):
             }[suit]
             painter.setPen(QColor(color))
             font = QFont("DejaVu Sans", 10, QFont.Weight.Bold)
-            font.setPixelSize(min(int(rect.width() * .82), max(24, round(rect.height() * .36 * FONT_SCALE))))
+            font.setPixelSize(round(rect.height() * .26 * FONT_SCALE))
+            # Keep the entire index inside the exposed portion of overlapping
+            # cards, including the two-character ten and its optical padding.
+            pad = rect.width() * .09
+            index_w = rect.width() * (CARD_SPACING_RATIO - .16)
+            rank = "10" if card[:-1] == "T" else card[:-1]
+            while QFontMetrics(font).horizontalAdvance(rank) > index_w and font.pixelSize() > 12:
+                font.setPixelSize(font.pixelSize() - 1)
             painter.setFont(font)
-            painter.drawText(rect.adjusted(4, 0, -2, -rect.height() * .4), Qt.AlignmentFlag.AlignLeft, card[:-1])
-            font.setPixelSize(min(int(rect.width() * .75), max(20, round(rect.height() * .3 * FONT_SCALE))))
+            index = QRectF(rect.x() + pad, rect.y() + rect.height() * .06, index_w, rect.height() * .41)
+            painter.drawText(index, Qt.AlignmentFlag.AlignCenter, rank)
+            font.setPixelSize(round(rect.height() * .20 * FONT_SCALE))
             painter.setFont(font)
-            painter.drawText(rect.adjusted(4, rect.height() * .51, -3, -1), Qt.AlignmentFlag.AlignLeft, symbol)
+            index.moveTop(rect.y() + rect.height() * .43)
+            index.setHeight(rect.height() * .33)
+            painter.drawText(index, Qt.AlignmentFlag.AlignCenter, symbol)
+            painter.setOpacity(painter.opacity() * .16)
+            font.setPixelSize(round(rect.height() * .38))
+            painter.setFont(font)
+            pip = QRectF(rect.x() + rect.width() * .49, rect.y() + rect.height() * .57,
+                         rect.width() * .44, rect.height() * .37)
+            painter.drawText(pip, Qt.AlignmentFlag.AlignCenter, symbol)
         painter.restore()
 
     def _draw_cards(
@@ -1907,8 +1943,7 @@ class GuiReplayer(QWidget):
         x = rect.center().x() - total_width / 2
         y = rect.y()
         highlight = highlight or frozenset()
-        # Offset winning cards away from the player's panel so they never slide
-        # behind it (panel is above the cards for top seats, below for bottom).
+        # Offset winning cards away from the player's panel.
         lift = int(card_height * 0.18) * (-1 if lift_up else 1) if lift_highlight else 0
         for card in cards:
             is_win = card in highlight and card not in {"0", "0x", None}
@@ -2190,7 +2225,7 @@ class GuiReplayer(QWidget):
         card_scale = max(MIN_CARD_SCALE, min(1.0, layout.card_width / CARD_WIDTH))
 
         name_font_size = max(9, int(10 * card_scale))
-        action_font_size = max(9, int(10 * card_scale))
+        action_font_size = max(8, int(9 * card_scale))
 
         actual_actor = player.justacted and bool(player.action)
         if getattr(self, "states", None):
@@ -2231,28 +2266,49 @@ class GuiReplayer(QWidget):
             if dprog is not None:
                 self._draw_discarded_cards(painter, player.discard_cards, player.discard_count, seat, layout, dprog)
 
-        painter.setPen(QPen(accent if actual_actor else QColor("#303640"), 1.5 if actual_actor else 1))
-        painter.setBrush(QColor("#252c32") if actual_actor else QColor("#1b2027"))
-        painter.drawRoundedRect(seat.panel_rect, 6, 6)
+        hero = player.name == self.Heroes
+        edge = "#8ca9b1" if actual_actor else "#506a64" if hero else "#3b444e"
+        if player.is_winner:
+            edge = "#b6a36f"
+        radius = max(12, seat.panel_rect.height() * .24)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 75))
+        painter.drawRoundedRect(seat.panel_rect.translated(0, 3), radius, radius)
+        plaque = QLinearGradient(seat.panel_rect.topLeft(), seat.panel_rect.bottomLeft())
+        plaque.setColorAt(0, QColor("#2b343b" if actual_actor or hero else "#252c34"))
+        plaque.setColorAt(1, QColor("#1b2229"))
+        painter.setPen(QPen(QColor(edge), 1.4 if actual_actor or player.is_winner else 1))
+        painter.setBrush(plaque)
+        painter.drawRoundedRect(seat.panel_rect, radius, radius)
+        painter.setPen(QPen(QColor(255, 255, 255, 15), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(seat.panel_rect.adjusted(2, 2, -2, -2), radius - 2, radius - 2)
 
         painter.setPen(text)
         painter.setFont(replay_font("DejaVu Sans", name_font_size, QFont.Weight.DemiBold))
-        stack_text = self._format_amount(player.stack)
+        # endHand keeps awarded chips separate for the physical won pile. The
+        # plaque shows the resulting total without changing that canonical state.
+        stack = player.stack + player.chips if is_final_frame and player.action == "collected" else player.stack
+        stack_text = self._format_amount(stack)
         name_rect = QRectF(
-            seat.panel_rect.x() + 6,
-            seat.panel_rect.y() + 2,
-            seat.panel_rect.width() - 12,
-            seat.panel_rect.height() * 0.48,
+            seat.panel_rect.x() + 12,
+            seat.panel_rect.y() + 4,
+            seat.panel_rect.width() - 24,
+            seat.panel_rect.height() * 0.40,
         )
-        stack_width = painter.fontMetrics().horizontalAdvance(stack_text) + 8
-        name_rect.adjust(2, 0, -stack_width, 0)
-        name = f"★ {player.name}" if player.name == self.Heroes else player.name
+        name = f"★ {player.name}" if hero else player.name
         name_text = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, int(name_rect.width()))
-        painter.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name_text)
-        stack_rect = QRectF(seat.panel_rect.right() - stack_width - 6, name_rect.y(), stack_width, name_rect.height())
-        painter.drawText(stack_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, stack_text)
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignCenter, name_text)
+        stack_rect = QRectF(name_rect.x(), seat.panel_rect.y() + seat.panel_rect.height() * .51,
+                           name_rect.width(), seat.panel_rect.height() * .41)
+        painter.setPen(QColor("#f5f7fa"))
+        stack_font = replay_font("DejaVu Sans", max(10, int(11 * card_scale)), QFont.Weight.Bold)
+        while QFontMetrics(stack_font).horizontalAdvance(stack_text) > stack_rect.width() and stack_font.pointSizeF() > 12:
+            stack_font.setPointSizeF(stack_font.pointSizeF() - .5)
+        painter.setFont(stack_font)
+        painter.drawText(stack_rect, Qt.AlignmentFlag.AlignCenter, stack_text)
 
-        action_text = player.action or ("Hero" if player.name == self.Heroes else "")
+        action_text = player.action or ""
         if player.justacted and player.action == "collected" and player.chips:
             action_text = f"collected {self._format_amount(player.chips)}"
         elif player.allin and player.action not in (None, "collected", "folds"):
@@ -2265,21 +2321,29 @@ class GuiReplayer(QWidget):
             # actually took off the table.
             splash_text = f"+{self._format_amount(player.splash)} splash"
             action_text = f"{action_text}  {splash_text}".strip()
-        painter.setPen(
-            QColor("#f5f7fa") if player.action == "collected"
-            else accent if actual_actor or player.is_winner else QColor("#a6afbc")
+        action_rect = QRectF()
+        meaningful_action = actual_actor or player.allin or (
+            is_final_frame and (player.action == "collected" or player.cashout is not None or player.splash)
         )
-        painter.setFont(replay_font(
-            "DejaVu Sans", action_font_size,
-            QFont.Weight.Bold if actual_actor or player.is_winner else QFont.Weight.Normal,
-        ))
-        action_rect = QRectF(
-            seat.panel_rect.x() + 6,
-            seat.panel_rect.y() + seat.panel_rect.height() * 0.48,
-            seat.panel_rect.width() - 12,
-            seat.panel_rect.height() * 0.48,
-        )
-        painter.drawText(action_rect, Qt.AlignmentFlag.AlignCenter, action_text)
+        if meaningful_action and action_text:
+            painter.setFont(replay_font("DejaVu Sans", action_font_size, QFont.Weight.Bold))
+            # Financial results may need more than one line; never ellide money.
+            badge_w = max(seat.panel_rect.width(), min(340, painter.fontMetrics().horizontalAdvance(action_text) + 20))
+            text_bounds = painter.fontMetrics().boundingRect(
+                0, 0, int(badge_w - 16), 120, int(Qt.TextFlag.TextWordWrap), action_text,
+            )
+            action_rect = QRectF(seat.panel_rect.center().x() - badge_w / 2, seat.panel_rect.bottom() + 5,
+                                 badge_w, text_bounds.height() + 8)
+            if action_rect.bottom() > self.height() - CONTROL_RESERVED_HEIGHT:
+                action_rect.moveBottom(seat.cards_rect.top() - int(layout.card_height * .18) - 6)
+            action_rect.moveLeft(max(8, min(action_rect.x(), self.width() - badge_w - 8)))
+            painter.setPen(QPen(QColor("#3c4650"), 1))
+            painter.setBrush(QColor("#171e24"))
+            painter.drawRoundedRect(action_rect, 9, 9)
+            financial = is_final_frame and (player.action == "collected" or player.cashout is not None or player.splash)
+            painter.setPen(QColor("#f5f7fa") if financial else accent)
+            painter.drawText(action_rect.adjusted(8, 2, -8, -2),
+                             Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, action_text)
 
         if is_final_frame and (player.combination or player.hi_winner or player.lo_winner):
             combo_font_size = max(9, int(10 * card_scale))
@@ -2306,7 +2370,7 @@ class GuiReplayer(QWidget):
             cards_above_panel = seat.cards_rect.center().y() < seat.panel_rect.center().y()
             usable_bottom = self.height() - CONTROL_RESERVED_HEIGHT
             if cards_above_panel:
-                outer_top = seat.panel_rect.bottom() + 6
+                outer_top = (action_rect.bottom() if not action_rect.isNull() else seat.panel_rect.bottom()) + 6
                 inner_top = seat.cards_rect.top() - lift - pill_h - 6
             else:
                 outer_top = seat.panel_rect.top() - pill_h - 6
@@ -2326,7 +2390,10 @@ class GuiReplayer(QWidget):
 
         if player.chips:
             avoid = [region for other_seat in layout.seats.values() for region in (other_seat.cards_rect, other_seat.panel_rect)]
-            if self.states[self.stateSlider.value()].renderBoard:
+            visible_board = self.states[self.stateSlider.value()].renderBoard
+            if any(phase.startswith(("FLOP", "TURN", "RIVER")) for phase in visible_board) or (
+                layout.seats and self.replay_model.hand.gametype.get("category", "").lower().startswith("cour")
+            ):
                 avoid.append(layout.board_rect)
             if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat:
                 size = max(24, int(DEALER_BUTTON_BASE_SIZE * card_scale))

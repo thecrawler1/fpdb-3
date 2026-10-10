@@ -1,6 +1,8 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from fpdb_3_legacy.GuiReplayer import (
     CONTROL_RESERVED_HEIGHT,
     HEADER_HEIGHT,
@@ -202,6 +204,18 @@ def test_layout_scales_cards_down_for_compact_windows():
 
     assert compact.card_width < full.card_width
     assert compact.card_width >= int(70 * MIN_CARD_SCALE)
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1280, 720), (1600, 900), (1260, 1380)])
+@pytest.mark.parametrize("category", ["holdem", "6_omahahi", "studhilo"])
+def test_player_clusters_keep_cards_above_plaques_in_landscape_and_portrait(size, category):
+    layout = build_replay_layout(*size, [f"p{i}" for i in range(5)], "p0", category)
+    for seat in layout.seats.values():
+        assert seat.cards_rect.bottom() < seat.panel_rect.top()
+        assert abs(seat.cards_rect.center().x() - seat.panel_rect.center().x()) < 1
+        assert seat.cards_rect.top() >= HEADER_HEIGHT
+        assert seat.panel_rect.bottom() < size[1] - CONTROL_RESERVED_HEIGHT
+        assert not seat.panel_rect.intersects(layout.board_rect)
 
 
 def test_bomb_pot_groups_parallel_boards_by_street() -> None:

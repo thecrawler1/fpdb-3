@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from PySide6.QtCore import QPoint, QRectF, QSettings, Qt
-from PySide6.QtGui import QContextMenuEvent, QFont, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QContextMenuEvent, QFont, QFontMetrics, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QMenu, QTableView, QWidget
 
 from fpdb_3_legacy import replayer_audio
@@ -183,7 +183,7 @@ def test_actor_emphasis_and_metrics_exclude_phase_copies(history_replayer, monke
     painter.fontMetrics.return_value.horizontalAdvance.return_value = 40
     painter.fontMetrics.return_value.elidedText.side_effect = lambda text, *args: text
     layout = build_replay_layout(1280, 720, list(replayer.states[2].players), replayer.Heroes, "holdem")
-    for index, weight in ((2, QFont.Weight.Bold), (3, QFont.Weight.Normal)):
+    for index, has_badge in ((2, True), (3, False)):
         replayer.stateSlider.setValue(index)
         frame = replayer._frame_from_state(replayer.states[index])
         player = next(player for player in frame.players if player.action == "big blind")
@@ -191,7 +191,12 @@ def test_actor_emphasis_and_metrics_exclude_phase_copies(history_replayer, monke
         player.justacted = True
         painter.reset_mock()
         replayer._draw_player(painter, player, layout.seats[player.name], layout, frame.street, False)
-        assert painter.setFont.call_args_list[1].args[0].weight() == weight
+        # The stack is always bold. Only a genuine action frame has a status
+        # badge; phase copies must not keep announcing the previous actor.
+        badges = [call for call in painter.drawText.call_args_list if call.args[-1] == "big blind"]
+        assert bool(badges) == has_badge
+        if has_badge:
+            assert painter.setFont.call_args_list[-1].args[0].weight() == QFont.Weight.Bold
     metrics = MagicMock(side_effect=AssertionError("Phase frame must not imply a hero turn"))
     monkeypatch.setattr(replayer, "_hero_decision_metrics", metrics)
     replayer._draw_summary(painter, frame, layout, 3)
@@ -277,6 +282,50 @@ def test_big_blind_toggle_converts_history_and_stacks_without_changing_state(qtb
     replayer.bigBlindCheck.setChecked(False)
     assert replayer._format_amount(Decimal(2)) == "$2.00"
     replayer.historyDialog.close()
+
+
+def test_result_plaque_shows_total_stack_and_preserves_separate_award_and_financial_labels(history_replayer, monkeypatch):
+    replayer = history_replayer
+    replayer._ensure_replayer_assets()
+    replayer.end_clicked(False)
+    replayer.bigBlindCheck.setChecked(True)
+    state = replayer.states[-1]
+    player = next(p for p in replayer._frame_from_state(state).players if p.action == "collected")
+    before = (state.players[player.name].stack, state.players[player.name].chips)
+    assert before == (Decimal(72), Decimal("17.50"))
+    player.cashout = Decimal("1.25")
+    player.splash = Decimal("2.50")
+    layout = build_replay_layout(1280, 720, list(state.players), replayer.Heroes, "holdem")
+    monkeypatch.setattr(replayer, "_draw_cards", lambda *args, **kwargs: None)
+    chips = MagicMock()
+    monkeypatch.setattr(replayer, "_draw_chip_amount", chips)
+    painter = MagicMock()
+    painter.setFont.side_effect = lambda font: setattr(painter.fontMetrics, "return_value", QFontMetrics(font))
+    replayer._draw_player(painter, player, layout.seats[player.name], layout, state.street, True)
+    labels = [call.args[-1] for call in painter.drawText.call_args_list]
+    assert "89.50 BB" in labels
+    assert "cashout 1.25 BB  +2.50 BB splash" in labels
+    assert chips.call_args.args[1] == Decimal("17.50")
+    assert (state.players[player.name].stack, state.players[player.name].chips) == before
+
+
+def test_long_nickname_uses_entire_name_row_and_elides_before_stack_row(history_replayer, monkeypatch):
+    replayer = history_replayer
+    replayer._ensure_replayer_assets()
+    player = replayer._frame_from_state(replayer.states[0]).players[0]
+    original_name = player.name
+    player.name = "A very long player nickname that must never run into the stack"
+    layout = build_replay_layout(1280, 720, [original_name], original_name, "holdem")
+    monkeypatch.setattr(replayer, "_draw_cards", lambda *args, **kwargs: None)
+    painter = MagicMock()
+    painter.setFont.side_effect = lambda font: setattr(painter.fontMetrics, "return_value", QFontMetrics(font))
+    seat = layout.seats[original_name]
+    replayer._draw_player(painter, player, seat, layout, "PREFLOP", False)
+    name_call, stack_call = painter.drawText.call_args_list[:2]
+    assert name_call.args[-1].endswith("…")
+    assert name_call.args[0].width() == seat.panel_rect.width() - 24
+    assert name_call.args[0].bottom() < stack_call.args[0].top()
+    assert stack_call.args[-1] == replayer._format_amount(player.stack)
 
 
 def test_central_piles_do_not_double_count_outstanding_bets(history_replayer):
