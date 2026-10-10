@@ -1,0 +1,23 @@
+"""Local presentation tokens for the Qt hand replayer."""
+
+REPLAYER_STYLE = """
+QWidget { background: #101216; color: #eef1f5; font-family: 'DejaVu Sans'; font-size: 12px; font-style: normal; }
+QPushButton { background: #22262e; border: 1px solid #303640; border-radius: 6px;
+    padding: 0px 12px; padding-top: 0px; padding-bottom: 0px; min-height: 30px; max-height: 30px; font-weight: 600; }
+QPushButton:hover { background: #303640; }
+QPushButton:pressed { background: #3b434e; }
+QPushButton:focus { border-color: #78d9a0; }
+QPushButton:disabled { color: #707986; background: #181b21; border-color: #252a32; }
+QPushButton[primary="true"] { background: #78d9a0; color: #101b15; border-color: #78d9a0; }
+QPushButton[primary="true"]:hover { background: #98e5b7; }
+QPushButton[streetActive="true"] { background: #293b32; color: #98e5b7; border-color: #435e50; }
+QCheckBox { spacing: 7px; color: #a6afbc; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #596372; border-radius: 3px; background: #22262e; }
+QCheckBox::indicator:checked, QCheckBox::indicator:checked:enabled { background: #78d9a0; border-color: #78d9a0; image: none; }
+QComboBox { background: #22262e; border: 1px solid #303640; border-radius: 5px; padding: 0px 8px; min-height: 28px; max-height: 28px; }
+QComboBox QAbstractItemView { background: #22262e; color: #eef1f5; selection-background-color: #435e50; }
+QSlider:horizontal { min-height: 16px; max-height: 16px; }
+QSlider::groove:horizontal { height: 4px; background: #303640; border-radius: 2px; }
+QSlider::handle:horizontal, QSlider::handle:horizontal:enabled { image: none; background: #98e5b7; background-color: #98e5b7; border: none; width: 12px; margin: -4px 0; border-radius: 6px; }
+QSlider::sub-page:horizontal { background: #78d9a0; border-radius: 2px; }
+"""

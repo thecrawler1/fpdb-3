@@ -45,8 +45,9 @@ def stud_replayer():
         height=lambda: 900,
         cardwidth=70,
         cardheight=100,
+        deckType="simple",
     )
-    for method in ("_normalized_cards", "_frame_from_state", "_visible_cards", "_draw_cards"):
+    for method in ("_normalized_cards", "_frame_from_state", "_visible_cards", "_draw_cards", "_paint_card"):
         setattr(replayer, method, MethodType(getattr(GuiReplayer, method), replayer))
     return replayer
 
@@ -168,6 +169,8 @@ def test_low_winner_render_highlights_five_cards_and_dims_other_two(stud_replaye
         side_effect=lambda _painter, *args, **kwargs: draw_cards(cards_painter, *args, **kwargs)
     )
     painter = Mock()
+    painter.fontMetrics.return_value.horizontalAdvance.side_effect = lambda text: len(text) * 7
+    painter.fontMetrics.return_value.elidedText.side_effect = lambda text, *_args: text
 
     GuiReplayer._draw_player(
         stud_replayer,

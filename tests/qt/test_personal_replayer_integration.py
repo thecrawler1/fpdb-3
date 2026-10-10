@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QMenu, QTableView, QWidget
 
 from fpdb_3_legacy import replayer_audio
 from fpdb_3_legacy.GuiHandViewer import GuiHandViewer
-from fpdb_3_legacy.GuiReplayer import GuiReplayer
+from fpdb_3_legacy.GuiReplayer import CONTROL_RESERVED_HEIGHT, GuiReplayer, build_replay_layout
 from fpdb_3_legacy.GuiTourHandViewer import TourHandViewer
 from fpdb_3_legacy.PokerStarsToFpdb import PokerStars
 
@@ -59,8 +59,51 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
     assert settings.value("sound/volume", type=int) == 48
     replayer.play_clicked(False)
     assert replayer.playTimer.isActive()
+    replayer.speedCombo.setCurrentIndex(3)
+    assert replayer.playTimer.interval() == 350
+    assert not replayer.previousHandButton.isEnabled()
+    assert not replayer.nextHandButton.isEnabled()
     replayer.close()
     assert not replayer.playTimer.isActive()
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1280, 720), (1600, 900)])
+def test_replayer_controls_reserve_real_space(qtbot, legacy_config, monkeypatch, size):
+    monkeypatch.setattr(replayer_audio, "prepare_sounds", lambda config: {})
+    fixture = Path(__file__).parent.parent / "fixtures/hands/pokerstars/review/nl_3bet_6max.txt"
+    hand = PokerStars(config=legacy_config, in_path=str(fixture), autostart=True).getProcessedHands()[0]
+    monkeypatch.setattr("fpdb_3_legacy.GuiReplayer.Hand.hand_factory", lambda *args: hand)
+    replayer = GuiReplayer(legacy_config, None, None, [1, 2], db=object())
+    qtbot.addWidget(replayer)
+    replayer.play_hand(0)
+    replayer.resize(*size)
+    qtbot.waitUntil(lambda: replayer.size().width() == size[0])
+    replayer.layout().activate()
+    replayer.controls.layout().activate()
+    qtbot.wait(1)
+    layout = build_replay_layout(*size, [player[1] for player in hand.players], hand.hero, "holdem")
+    assert replayer.controls.y() >= size[1] - CONTROL_RESERVED_HEIGHT
+    controls = [
+        replayer.stateSlider, *replayer.streetButtons.values(), replayer.startButton,
+        replayer.prevButton, replayer.playPauseButton, replayer.nextButton, replayer.endButton,
+        replayer.previousHandButton, replayer.nextHandButton, replayer.speedCombo,
+        replayer.showCards, replayer.soundCheck, replayer.soundVolume, replayer.deckTypeCombo,
+    ]
+    rects = []
+    for widget in controls:
+        rect = widget.rect().translated(widget.mapTo(replayer, QPoint(0, 0)))
+        assert replayer.rect().contains(rect)
+        assert rect.top() >= replayer.controls.y()
+        assert all(not rect.intersects(other) for other in rects), (widget, rect, rects)
+        rects.append(rect)
+    for seat in layout.seats.values():
+        assert seat.cards_rect.bottom() < replayer.controls.y()
+        assert seat.panel_rect.bottom() < replayer.controls.y()
+    qtbot.mouseClick(replayer.nextHandButton, Qt.MouseButton.LeftButton)
+    assert replayer.handidx == 1
+    assert replayer.previousHandButton.isEnabled()
+    assert not replayer.nextHandButton.isEnabled()
+    replayer.close()
 
 
 @pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])
