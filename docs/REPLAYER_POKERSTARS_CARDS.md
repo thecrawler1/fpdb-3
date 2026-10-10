@@ -7,13 +7,19 @@ mais legíveis e identificação inequívoca do dono de cada aposta.
 
 - A geometria das apostas parte do assento efetivamente desenhado, incluindo
   os ajustes de posição em janelas estreitas.
-- Uma ligação pontilhada discreta associa cada aposta à placa ou às cartas
-  do dono, mesmo quando o grupo precisa desviar de uma região ocupada.
+- Sem linhas entre aposta e jogador: a ligação pontilhada da primeira versão
+  desta etapa foi removida após a revisão visual do usuário.
 - A aposta do assento inferior fica ao lado das suas cartas, preservando a
   faixa central para o pote e para o jogador de cima.
-- As apostas evitam cartas, placas, board visível, dealer do dono e grupos de
-  fichas já desenhados. O total do pote pré-flop reserva espaço abaixo da aposta
-  do assento superior.
+- As apostas são desenhadas depois de todos os assentos, reservando cartas
+  (inclusive elevadas ou animadas), placas, badges de ação/resultado, combinações,
+  todos os dealers, board, pote, outras apostas e timeline. A área disponível
+  também exclui o cabeçalho e os controles.
+- Se os desvios próximos estiverem ocupados, o posicionador busca áreas livres
+  nas bordas dos obstáculos; não retorna ao ponto original sobre um elemento.
+  Em espaços muito estreitos, prioriza o rótulo do valor exato sobre as pilhas
+  decorativas, mantendo a decomposição disponível no tooltip.
+- O total do pote pré-flop reserva espaço abaixo da aposta do assento superior.
 - Fichas de 32 px, com bordas segmentadas, profundidade e denominação impressa.
   A decomposição continua exata; os valores impressos são unidades canônicas,
   enquanto o rótulo do total acompanha o modo monetário ou BB.
@@ -37,7 +43,7 @@ com uma mão pública de teste.
 
 ## Verificação
 
-- **149 testes direcionados aprovados**, incluindo layout, BB, fichas exatas,
+- **159 testes direcionados aprovados**, incluindo layout, BB, fichas exatas,
   fold, variantes, controles, áudio, equidade, compartilhamento e solver review.
 - Ruff aprovado nos arquivos alterados; mypy aprovado nos módulos de cartas,
   fichas e áudio.
@@ -47,6 +53,11 @@ com uma mão pública de teste.
   reais** e comportamento de avanço/reversão/salto/fechamento verificados.
 - Capturas Qt/offscreen em 1280×720, 1600×900 e 1260×1380, incluindo fold,
   resultado, valores em BB e o cenário conservado de main pot 240 + side pot 40.
+- Verificação de todas as apostas em cada estado da mão pública, nos modos
+  monetário e BB, em 1060×720, 1280×720, 1600×900 e 1260×1380: sem colisões
+  com os elementos visíveis reservados, o pote ou outras apostas, e sem sair
+  da janela ou invadir os controles. Testes específicos cobrem desvios locais
+  totalmente bloqueados e a apresentação compacta do valor.
 
 As capturas não acessam o banco pessoal. Para reproduzir com faces locais:
 
