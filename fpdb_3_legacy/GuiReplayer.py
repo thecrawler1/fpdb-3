@@ -722,16 +722,20 @@ def build_replay_layout(
             cards_rect.moveLeft(cluster_x - card_w / 2)
             panel_rect.moveLeft(cluster_x - panel_w / 2)
 
-        bet_x = table_rect.center().x() + anchor.x * table_rect.width() * 0.26
-        bet_y = table_rect.center().y() + anchor.y * table_rect.height() * 0.28
-        if abs(anchor.y) < 0.35:
-            bet_y += int(24 * card_scale) if index % 2 else int(-24 * card_scale)
-        if abs(anchor.x) < 0.35:
-            bet_x += table_rect.width() * (.23 if anchor.y > 0 else .14)
-        if anchor.y > 0.6:
-            bet_y = min(bet_y, cards_rect.y() - int(24 * card_scale))
-        elif anchor.y < -0.6:
-            bet_y = max(bet_y, panel_rect.bottom() + max(24, int(30 * card_scale)))
+        # Start at this player's actual (clamped) cluster, along its inward
+        # axis. A table-wide ellipse used to move the bottom player's bet
+        # toward a neighbour and made ownership particularly hard to read.
+        cluster = cards_rect.united(panel_rect)
+        dx = table_rect.center().x() - cluster.center().x()
+        dy = table_rect.center().y() - cluster.center().y()
+        length = max(1.0, hypot(dx, dy))
+        ux, uy = dx / length, dy / length
+        edge_distance = min(
+            cluster.width() / (2 * abs(ux)) if abs(ux) > .001 else float("inf"),
+            cluster.height() / (2 * abs(uy)) if abs(uy) > .001 else float("inf"),
+        )
+        bet_x = cluster.center().x() + ux * (edge_distance + 58)
+        bet_y = cluster.center().y() + uy * (edge_distance + 38)
 
         dealer_x = table_rect.center().x() + anchor.x * table_rect.width() * 0.38
         dealer_y = table_rect.center().y() + anchor.y * table_rect.height() * 0.38
@@ -1029,10 +1033,10 @@ class GuiReplayer(QWidget):
                         quantum = min(quantum, Decimal(1).scaleb(amount.normalize().as_tuple().exponent))
         self.chip_quantum = quantum
 
-    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=()) -> None:
+    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=(), owner=None) -> None:
         text = f"{caption}: {self._format_amount(amount)}" if caption else self._format_amount(amount)
         bounds, stacks = draw_chip_amount(
-            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid,
+            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid, owner=owner,
         )
         breakdown = "; ".join(f"{stack.count} × {self._format_amount(stack.denomination)}" for stack in stacks)
         tooltip = f"{text}\n{breakdown}" if breakdown else text
@@ -2395,7 +2399,14 @@ class GuiReplayer(QWidget):
             painter.drawText(combo_rect, Qt.AlignmentFlag.AlignCenter, combo_text)
 
         if player.chips:
+            cluster = seat.cards_rect.united(seat.panel_rect)
+            target = seat.bet_rect.center()
+            owner = QPointF(
+                max(cluster.left(), min(target.x(), cluster.right())),
+                max(cluster.top(), min(target.y(), cluster.bottom())),
+            )
             avoid = [region for other_seat in layout.seats.values() for region in (other_seat.cards_rect, other_seat.panel_rect)]
+            avoid.extend(bounds for bounds, _tooltip in getattr(self, "_chip_regions", []))
             visible_board = self.states[self.stateSlider.value()].renderBoard
             if any(phase.startswith(("FLOP", "TURN", "RIVER")) for phase in visible_board) or (
                 layout.seats and self.replay_model.hand.gametype.get("category", "").lower().startswith("cour")
@@ -2409,6 +2420,7 @@ class GuiReplayer(QWidget):
                 _("Won") if player.action == "collected" else "",
                 max_width=200,
                 avoid=tuple(avoid),
+                owner=owner,
             )
 
         if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat and not self.dealer.isNull():
