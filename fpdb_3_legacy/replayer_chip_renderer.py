@@ -91,6 +91,28 @@ def _place_amount(anchor: QPointF, width: float, height: float, avoid: tuple[QRe
     return QRectF()
 
 
+def _draw_stacks(painter: QPainter, stacks: list[ChipStack], left: float, center_y: float) -> None:
+    diameter, stride = 32, 36
+    for column, stack in enumerate(stacks):
+        center_x = left + diameter / 2 + column * stride
+        color = QColor(stack.color)
+        rim = QColor("#3f474f") if color.lightness() > 170 else QColor("#e4e7e9")
+        for number in range(stack.count):
+            top = QRectF(center_x - diameter / 2, center_y - 4 - number * 3, diameter, 19)
+            painter.setPen(QPen(color.darker(170), 1))
+            painter.setBrush(color.darker(140))
+            painter.drawEllipse(top.translated(0, 3))
+            painter.setBrush(color)
+            painter.drawEllipse(top)
+            painter.setPen(QPen(rim, 1.6))
+            for angle in (20, 110, 200, 290):
+                painter.drawArc(top.adjusted(1, 1, -1, -1), angle * 16, 30 * 16)
+            painter.setPen(QPen(color.darker(150), 1))
+            painter.setBrush(color.lighter(115))
+            painter.drawEllipse(top.adjusted(5, 3, -5, -3))
+        _draw_denomination(painter, stack, top, color)
+
+
 def draw_chip_amount(
     painter: QPainter,
     amount: Decimal,
@@ -111,10 +133,18 @@ def draw_chip_amount(
     label_width = metrics.horizontalAdvance(text) + 16
     label_height = max(38 if stacks else 32, metrics.height() + 8)
     diameter, gap = 32, 8 if stacks else 0
-    stride = min(30, max(12, (max_width - label_width - gap - diameter) / max(1, len(stacks) - 1)))
+    # max_width is advisory: narrowing a group must never make neighbouring
+    # denomination stacks overlap. Placement/compact labels handle crowding.
+    stride = diameter + 4
     chips_width = diameter + (len(stacks) - 1) * stride if stacks else 0
     width = chips_width + gap + label_width
     bounds = _place_amount(anchor, width, label_height, avoid, available, felt)
+    label_below = False
+    if bounds.isNull() and stacks:
+        # Keep separated denomination piles visible in narrow spaces by putting
+        # their total below them, instead of squeezing their columns together.
+        bounds = _place_amount(anchor, max(chips_width, label_width), 38 + 6 + label_height, avoid, available, felt)
+        label_below = not bounds.isNull()
     label_font = painter.font()
     if bounds.isNull() and not stacks:
         # Dense tables may have room for the exact value but not the regular
@@ -134,31 +164,17 @@ def draw_chip_amount(
         return bounds, stacks
     anchor = bounds.center()
     left = bounds.left()
-    for column, stack in enumerate(stacks):
-        center_x = left + diameter / 2 + column * stride
-        color = QColor(stack.color)
-        rim = QColor("#3f474f") if color.lightness() > 170 else QColor("#e4e7e9")
-        for number in range(stack.count):
-            top = QRectF(center_x - diameter / 2, anchor.y() - 4 - number * 3, diameter, 19)
-            painter.setPen(QPen(color.darker(170), 1))
-            painter.setBrush(color.darker(140))
-            painter.drawEllipse(top.translated(0, 3))
-            painter.setBrush(color)
-            painter.drawEllipse(top)
-            painter.setPen(QPen(rim, 1.6))
-            for angle in (20, 110, 200, 290):
-                painter.drawArc(top.adjusted(1, 1, -1, -1), angle * 16, 30 * 16)
-            painter.setPen(QPen(color.darker(150), 1))
-            painter.setBrush(color.lighter(115))
-            inset = top.adjusted(5, 3, -5, -3)
-            painter.drawEllipse(inset)
-        _draw_denomination(painter, stack, top, color)
+    if label_below:
+        _draw_stacks(painter, stacks, anchor.x() - chips_width / 2, bounds.top() + 19)
+        label = QRectF(anchor.x() - label_width / 2, bounds.bottom() - label_height, label_width, label_height)
+    else:
+        _draw_stacks(painter, stacks, left, anchor.y())
+        label = QRectF(left + chips_width + gap, anchor.y() - label_height / 2, label_width, label_height)
     painter.setFont(label_font)
-    label = QRectF(left + chips_width + gap, anchor.y() - label_height / 2, label_width, label_height)
     painter.setPen(QPen(QColor("#43505c"), 1))
     painter.setBrush(QColor(12, 20, 27, 235))
     painter.drawRoundedRect(label, 5, 5)
     painter.setPen(QColor("#f5f7fa"))
     painter.drawText(label, Qt.AlignmentFlag.AlignCenter, text)
     painter.restore()
-    return QRectF(left, label.top(), width, label_height), stacks
+    return bounds, stacks

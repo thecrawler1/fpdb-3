@@ -42,6 +42,60 @@ def test_cramped_area_keeps_exact_amount_without_decorative_stacks(qapp):
     assert canvas.rect().contains(bounds.toRect())
 
 
+@pytest.mark.parametrize("amount", [".12", ".24", "2.47", "17.50", "12345.67"])
+@pytest.mark.parametrize("max_width", [120, 200, 240])
+def test_denomination_stacks_never_overlap_even_with_small_width_budget(qapp, monkeypatch, amount, max_width):
+    canvas = QPixmap(1000, 300)
+    columns = {}
+    with QPainter(canvas) as painter:
+        original = painter.drawEllipse
+
+        def record(rect):
+            if rect.width() == 32:
+                columns[rect.left()] = columns.get(rect.left(), QRectF()).united(rect)
+            original(rect)
+
+        monkeypatch.setattr(painter, "drawEllipse", record)
+        bounds, stacks = draw_chip_amount(
+            painter, Decimal(amount), QPointF(500, 150), f"${Decimal(amount):.2f}", Decimal(".01"),
+            max_width=max_width,
+        )
+    assert not bounds.isNull()
+    assert len(columns) == len(stacks)
+    groups = [columns[x] for x in sorted(columns)]
+    assert all(a.right() + 4 <= b.left() for a, b in zip(groups, groups[1:]))
+    assert all(bounds.contains(group) for group in groups)
+
+
+@pytest.mark.parametrize("amount", ["17.50", "2.47"])
+def test_narrow_space_keeps_separated_stacks_with_total_below(qapp, monkeypatch, amount):
+    canvas = QPixmap(160, 120)
+    chips, labels = [], []
+    with QPainter(canvas) as painter:
+        ellipse, rounded = painter.drawEllipse, painter.drawRoundedRect
+
+        def record_chip(rect):
+            if rect.width() == 32:
+                chips.append(QRectF(rect))
+            ellipse(rect)
+
+        def record_label(rect, *args):
+            labels.append(QRectF(rect))
+            rounded(rect, *args)
+
+        monkeypatch.setattr(painter, "drawEllipse", record_chip)
+        monkeypatch.setattr(painter, "drawRoundedRect", record_label)
+        bounds, stacks = draw_chip_amount(
+            painter, Decimal(amount), QPointF(80, 60), f"${amount}", Decimal(".01"),
+            available=QRectF(canvas.rect()),
+        )
+    assert not bounds.isNull()
+    assert len({rect.left() for rect in chips}) == len(stacks)
+    assert len(labels) == 1
+    assert all(rect.bottom() < labels[0].top() for rect in chips)
+    assert all(bounds.contains(rect) for rect in [*chips, *labels])
+
+
 @pytest.mark.parametrize("count", range(2, 11))
 @pytest.mark.parametrize("size", [(1280, 720), (1600, 900), (1260, 1380)])
 @pytest.mark.parametrize("big_blinds", [False, True])
