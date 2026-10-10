@@ -9,9 +9,10 @@
 - Feedback imediato de hover/press, mais uma animação curta do ícone. A área de
   clique não se move; a ação ocorre pela liberação nativa do botão.
 - Preflop/Flop/Turn/River mantidos como atalhos secundários.
-- Som local fixo em 100%, preservando apenas o toggle Sound. O volume do sistema
+- Som local fixo em 50%, preservando apenas o toggle Sound. O volume do sistema
   operacional continua independente.
-- Fontes do replayer ampliadas em 50%; ranks e naipes do deck colour maiores.
+- Fontes do replayer ampliadas em 50%; deck colour com faces completas locais
+  do PokerStars (refinamento posterior aos índices ampliados da primeira etapa).
   As dimensões externas das cartas usam a mesma referência de viewport anterior.
 - Checkbox Big blinds para stacks, apostas, potes, ganhos e ações do histórico.
   A preferência fica salva. Uma variante sem big blind utilizável não oferece

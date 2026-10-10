@@ -7,6 +7,10 @@ composição coerente de cartas, nick e stack, não apenas da paleta de cores.
 Esta revisão usa placas compactas, profundidade discreta e informação centralizada,
 preservando a clareza de uma ferramenta de estudo moderna.
 
+O refinamento seguinte substitui as faces simplificadas por cartas completas,
+melhora a associação das apostas aos donos e ajusta o áudio para 50%; veja
+[Cartas PokerStars e apostas por assento](REPLAYER_POKERSTARS_CARDS.md).
+
 ## Mudanças
 
 - Nick centralizado na linha superior, com toda a largura disponível.

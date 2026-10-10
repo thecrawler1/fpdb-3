@@ -13,7 +13,7 @@ Git acima identifica precisamente o conjunto de funcionalidades incorporado.
 ## Alterações
 
 - Efeitos sonoros no hand replayer, com opção **Sound** para ativar/silenciar.
-- Preferência de som persistente; volume local fixo em 100%, sem slider.
+- Preferência de som persistente; volume local fixo em 50%, sem slider.
 - Efeitos carregados da instalação local do PokerStars: check, fold, aposta,
   raise, distribuição de cartas, pilha de fichas para all-in e entrega do pote.
 - Balanceamento de volume, preservando o timbre e o áudio estéreo.
@@ -23,6 +23,8 @@ Git acima identifica precisamente o conjunto de funcionalidades incorporado.
 - Controles manuais por ícones, tipografia ampliada e opção de valores em BB.
 - Fichas por denominação e potes físicos separados das apostas em andamento;
   veja [REPLAYER_MANUAL_CONTROLS.md](REPLAYER_MANUAL_CONTROLS.md).
+- Apostas ancoradas ao dono, fichas maiores com denominações impressas e cartas
+  completas da instalação local; veja [REPLAYER_POKERSTARS_CARDS.md](REPLAYER_POKERSTARS_CARDS.md).
 
 ## Instalação Linux
 
@@ -130,6 +132,11 @@ O primeiro carregamento prepara os arquivos; os seguintes reutilizam o cache.
 Mudanças nos arquivos do PokerStars geram novas entradas automaticamente.
 Se a instalação ou o áudio não estiver disponível, o replayer continua funcionando
 sem os efeitos. Os arquivos originais do PokerStars não são alterados.
+
+Com o deck **colour**, o replayer lê as faces completas de
+`site_path/Gx/table-view/cards/default/1440/cache/`, mantendo o verso discreto
+do FPDB. Se uma face local estiver indisponível, usa o deck SVG `white` já
+distribuído no projeto. Nenhuma carta proprietária é incluída no fork.
 
 ### Instalar os comandos e o atalho
 
