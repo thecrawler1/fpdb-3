@@ -2017,6 +2017,24 @@ class fpdb(QMainWindow):
 
         self.open_tab("Session Stats", build, module="fpdb_3_legacy.GuiSessionViewer")
 
+    def tab_results(self, widget, data=None) -> None:
+        def build(module):
+            page = module.GuiResultsViewer(self.config, self.sql)
+            page.hands_requested.connect(self._open_result_hands)
+            return page
+
+        self.open_tab("Results", build, module="fpdb_3_legacy.GuiResultsViewer", allow_multiple=False)
+
+    def _open_result_hands(self, hand_ids) -> None:
+        viewer = next((page for page in self.threads if isinstance(page, GuiHandViewer.GuiHandViewer)), None)
+        if viewer is None:
+            self.tab_hand_viewer(None)
+            viewer = next((page for page in self.threads if isinstance(page, GuiHandViewer.GuiHandViewer)), None)
+        else:
+            self.display_tab("Hand Viewer")
+        if viewer is not None:
+            viewer.reload_hands(hand_ids)
+
     def tab_hand_viewer(self, widget, data=None) -> None:
         self.open_tab("Hand Viewer", lambda: GuiHandViewer.GuiHandViewer(self.config, self.sql, self))
 

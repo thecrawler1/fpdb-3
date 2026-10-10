@@ -42,10 +42,16 @@ class ProfitGraphWidget(pg.PlotWidget):
         self.getAxis("left").setTextPen(pg.mkPen(color=text_color))
         self.getAxis("bottom").setTextPen(pg.mkPen(color=text_color))
 
-    def plot_profit_data(self, profits: tuple[np.ndarray, ...] | list[float], hands: list[int]) -> None:
+    def plot_profit_data(self, profits: tuple[np.ndarray, ...] | list[float], hands: list[int], *,
+                         units: str | None = None, title: str | None = None, show_all_lines: bool = False) -> None:
         """Trace les courbes de profit cumulé, dont le net hors splash."""
         self.clear()
         self.update_style()
+        if units is not None:
+            self.setLabel("left", units)
+            self.setLabel("bottom", _("Hands"))
+        if title is not None:
+            self.setTitle(title)
 
         if not profits:
             return
@@ -90,7 +96,7 @@ class ProfitGraphWidget(pg.PlotWidget):
             self.plot(x, red, pen=pg.mkPen(color=color_down, width=1.5, style=Qt.PenStyle.DashLine), name="Non-Showdown")
 
         # 4. All-In EV (Orange)
-        if len(ev) > 0 and not np.all(ev == 0):
+        if len(ev) > 0 and (show_all_lines or not np.all(ev == 0)):
             self.plot(x, ev, pen=pg.mkPen(color=c.get("graph_ev", "#dd6b20"), width=1.5), name="All-In EV")
 
         if len(nosplash) > 0 and not np.array_equal(nosplash, green):
