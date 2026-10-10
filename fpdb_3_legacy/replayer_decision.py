@@ -1,6 +1,6 @@
 """Hero-facing replay arithmetic using only the states already displayed."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
@@ -112,3 +112,27 @@ def hero_decision(states: list[Any], index: int, hero_name: str) -> HeroDecision
             mdf, fe = pot / (pot + risk) * HUNDRED, risk / (pot + risk) * HUNDRED
     return HeroDecision(**base, mode="bet", action=current.players[hero_name].action, bet_amount=amount,
                         bet_pct=sizing, mdf_pct=mdf, fold_equity_pct=fe)
+
+
+def next_decision_actor(states: list[Any], index: int) -> str | None:
+    """Use the replay sequence only to identify whose turn is next, not its size."""
+    if not states or not 0 <= index < len(states) or getattr(states[index], "ended", False):
+        return None
+    current = states[index]
+    for following in states[index + 1:]:
+        if following.street != current.street or getattr(following, "ended", False):
+            return None
+        for name, player in following.players.items():
+            if player.justacted and (player.action in {"checks", "calls", "bets", "raises", "folds", "stands pat"}
+                                     or (player.action or "").startswith("discards")):
+                present = current.players.get(name)
+                return name if present and _live(present) and present.stack > 0 else None
+    return None
+
+
+def action_decision(states: list[Any], index: int, hero_name: str) -> tuple[str | None, HeroDecision]:
+    actor = next_decision_actor(states, index)
+    metrics = hero_decision(states, index, actor or hero_name)
+    if actor is None:
+        metrics = replace(metrics, mode="neutral", call_amount=ZERO, pot_odds_pct=None)
+    return actor, metrics

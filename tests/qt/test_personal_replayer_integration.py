@@ -250,7 +250,7 @@ def test_wide_replayer_has_only_table_and_commands_without_header_or_timeline(qt
         mock.assert_not_called()
 
 
-def test_command_metrics_show_turn_spr_call_odds_and_hero_mdf_without_equity_lookup(
+def test_two_fixed_columns_show_next_actors_odds_and_spr_without_equity_lookup(
     qtbot, qapp, history_replayer, monkeypatch, tmp_path
 ):
     from tools.capture_replayer_review import capture_decision_cases
@@ -264,20 +264,45 @@ def test_command_metrics_show_turn_spr_call_odds_and_hero_mdf_without_equity_loo
 
     def record():
         image = grab()
-        captured.append((replayer.decisionPanel.metrics, [label.text() for label in replayer.decisionPanel.labels]))
+        captured.append((replayer.decisionPanel.metrics, [label.text() for label in replayer.decisionPanel.labels],
+                         replayer.decisionPanel.actor))
         return image
 
     monkeypatch.setattr(replayer, "grab", record)
     capture_decision_cases(replayer, replayer.replay_model.hand, qapp, tmp_path)
-    assert [metrics.mode for metrics, _ in captured] == ["neutral", "bet", "call"]
-    assert all(metrics.street == "TURN" and metrics.spr == (Decimal("9.5"),) for metrics, _ in captured)
-    assert round(captured[1][0].mdf_pct, 1) == Decimal("66.7")
+    assert [metrics.mode for metrics, _, _ in captured] == ["neutral", "call", "call"]
+    assert [actor for _, _, actor in captured] == ["Hero", "Player4", "Hero"]
+    assert all(metrics.street == "TURN" and metrics.spr == (Decimal("9.5"),) for metrics, _, _ in captured)
+    assert captured[1][0].pot_odds_pct == 25
     assert captured[2][0].pot_odds_pct == 25
-    assert "SPR · TURN" in captured[0][1][2]
-    assert "95 BB" in captured[2][1][2]
+    assert len(replayer.decisionPanel.labels) == 2
+    for _, texts, _ in captured:
+        assert "POT ODDS" in texts[0] and "SPR" in texts[1]
+        assert all(extra not in " ".join(texts) for extra in ("MDF", "Effective", "Minimum", "CALL", "BET", "TURN"))
     assert all(replayer.rect().contains(label.geometry().translated(replayer.decisionPanel.pos()))
                for label in replayer.decisionPanel.labels)
     equity.assert_not_called()
+
+
+def test_minimal_strip_has_only_fixed_headings_and_a_plain_multiway_range(history_replayer):
+    from PySide6.QtGui import QTextDocument
+
+    from fpdb_3_legacy.replayer_decision import HeroDecision
+
+    panel = history_replayer.decisionPanel
+    panel.display(HeroDecision(street="TURN", mode="call", pot_odds_pct=Decimal(25), street_pot=Decimal(1),
+                               effective=(("A", Decimal(50)), ("B", Decimal(65)))), "A")
+    texts = []
+    for label in panel.labels:
+        document = QTextDocument()
+        document.setHtml(label.text())
+        texts.append(document.toPlainText())
+    assert texts == ["POT ODDS\n25%", "SPR\n50–65"]
+    panel.display(HeroDecision(street="RIVER", mode="bet", mdf_pct=Decimal("66.7")))
+    for label, title in zip(panel.labels, ("POT ODDS", "SPR")):
+        document = QTextDocument()
+        document.setHtml(label.text())
+        assert document.toPlainText() == f"{title}\n—"
 
 
 def test_transport_press_feedback_preserves_hit_area_and_release_click(qtbot, history_replayer):

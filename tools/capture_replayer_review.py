@@ -77,19 +77,23 @@ def capture_bet_cases(replayer, hand, app, output: Path) -> None:
     before = copy.deepcopy(state)
     state.updateForAction(("Hero", "bets", Decimal(".12")))
     state.updateForAction(("Player4", "raises", Decimal(".12")))
+    following = copy.deepcopy(state)
+    following.updateForAction(("Hero", "calls", Decimal(".12")))
     replayer.replay_model.hand = review
     replayer.info = replayer._format_hand_info(review)
-    replayer.states = replayer.replay_model.states = [before, state]
+    replayer.states = replayer.replay_model.states = [before, state, following]
     replayer._configure_replay_units(review)
-    replayer.stateSlider.setMaximum(1)
+    replayer.stateSlider.setMaximum(2)
     replayer.stateSlider.setValue(1)
+    replayer.streetButtons["TURN"].setEnabled(True)
+    replayer._sync_replayer_controls()
     for width, height in ((1280, 720), (1260, 1380)):
         settle_capture(replayer, app, width, height)
         replayer.grab().save(str(output / f"turn-bets-{width}.png"))
 
 
 def capture_decision_cases(replayer, hand, app, output: Path) -> None:
-    """Heads-up turn: 10 BB pot, 95 BB effective, facing/betting half pot."""
+    """Heads-up turn: next actor's odds, 10 BB pot and 95 BB effective."""
     from fpdb_3_legacy.GuiReplayer import TableState
 
     review = copy.copy(hand)
@@ -112,9 +116,15 @@ def capture_decision_cases(replayer, hand, app, output: Path) -> None:
     call.updateForAction(("Player4", "bets", Decimal(".05")))
     replayer.replay_model.hand = review
     replayer._configure_replay_units(review)
-    for label, current in (("spr-turn", initial), ("mdf-turn", bet), ("pot-odds-turn", call)):
-        replayer.states = replayer.replay_model.states = [initial, current]
-        replayer.stateSlider.setMaximum(1)
+    replayer.streetButtons["TURN"].setEnabled(True)
+    cases = (("spr-turn", initial, ("Hero", "checks")),
+             ("facing-hero-bet", bet, ("Player4", "calls", Decimal(".05"))),
+             ("pot-odds-turn", call, ("Hero", "calls", Decimal(".05"))))
+    for label, current, action in cases:
+        following = copy.deepcopy(current)
+        following.updateForAction(action)
+        replayer.states = replayer.replay_model.states = [initial, current, following]
+        replayer.stateSlider.setMaximum(2)
         replayer.stateSlider.setValue(1)
         settle_capture(replayer, app, 1280, 720)
         replayer.grab().save(str(output / f"{label}.png"))
@@ -127,7 +137,7 @@ def parse_args(argv=None):
     parser.add_argument("--side-pots", action="store_true", help="include a synthetic, conserved two-pot scenario")
     parser.add_argument("--polish-cases", action="store_true", help="include portrait and controlled fold frames")
     parser.add_argument("--bet-cases", action="store_true", help="include the five-handed turn with 12 BB facing 24 BB")
-    parser.add_argument("--decision-cases", action="store_true", help="include HU turn SPR, half-pot MDF and call odds")
+    parser.add_argument("--decision-cases", action="store_true", help="include HU turn SPR and the current actor's call odds")
     parser.add_argument("--pokerstars-path", type=Path, help="read complete card faces from this local client installation")
     return parser.parse_args(argv)
 

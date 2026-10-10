@@ -4,7 +4,7 @@ from copy import deepcopy
 from decimal import Decimal as D
 from types import SimpleNamespace as NS
 
-from fpdb_3_legacy.replayer_decision import hero_decision
+from fpdb_3_legacy.replayer_decision import action_decision, hero_decision
 
 
 def player(name, stack, *, start=100, chips=0, action=None, acted=False, folded=False):
@@ -120,3 +120,26 @@ def test_no_pot_missing_hero_and_future_states_do_not_invent_metrics():
     assert hero_decision([current, future], 0, "Hero") == hero_decision([current], 0, "Hero")
     assert not hero_decision([current], 0, "Hero").spr
     assert not hero_decision([current], 0, "Missing").effective
+
+
+def test_action_odds_switch_to_opponent_after_hero_bet_without_using_future_size():
+    before = state("TURN", player("Hero", 95), player("Villain", 95))
+    bet = state("TURN", player("Hero", 90, chips=5, action="bets", acted=True), player("Villain", 95))
+    future = state("TURN", player("Hero", 90, chips=5, action="bets"), player("Villain", 90, chips=5, action="calls", acted=True))
+    actor, metrics = action_decision([before, bet, future], 1, "Hero")
+    assert actor == "Villain"
+    assert metrics.call_amount == 5 and metrics.pot_odds_pct == 25
+    assert metrics.spr == (D("9.5"),)
+    future.players["Villain"].chips = D(80)
+    future.players["Villain"].action = "raises"
+    assert action_decision([before, bet, future], 1, "Hero") == (actor, metrics)
+
+
+def test_action_identity_does_not_cross_streets_and_result_clears_odds():
+    before = state("FLOP", player("Hero", 95), player("Villain", 95))
+    turn = state("TURN", player("Hero", 90, chips=5, action="bets", acted=True), player("Villain", 95))
+    actor, metrics = action_decision([before, turn], 0, "Hero")
+    assert actor is None and metrics.pot_odds_pct is None
+    assert metrics.spr == (D("9.5"),)
+    before.ended = True
+    assert action_decision([before, turn], 0, "Hero")[0] is None

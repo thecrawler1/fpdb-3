@@ -66,7 +66,7 @@ from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.replayer_audio import ReplayerAudio, transition_sound
 from fpdb_3_legacy.replayer_chip_renderer import draw_chip_amount
 from fpdb_3_legacy.replayer_controls import ReplayControlButton
-from fpdb_3_legacy.replayer_decision import HeroDecision, hero_decision
+from fpdb_3_legacy.replayer_decision import HeroDecision, action_decision
 from fpdb_3_legacy.replayer_decision_panel import DecisionPanel
 from fpdb_3_legacy.replayer_style import REPLAYER_STYLE, replay_font
 
@@ -1616,7 +1616,7 @@ class GuiReplayer(QWidget):
         ofc_hand = self.replay_model.hand
         state = self.states[self.stateSlider.value()]
         self._draw_ofc_scene(painter, ofc_hand, state)
-        self.decisionPanel.display(HeroDecision(), self._format_amount)
+        self.decisionPanel.display(HeroDecision())
 
     def _build_replay_model(self, hand) -> ReplayModel:
         states = []
@@ -2858,8 +2858,8 @@ class GuiReplayer(QWidget):
         self._timeline_hit_regions = []
 
     def _update_decision_strip(self) -> None:
-        metrics = hero_decision(self.states, self.stateSlider.value(), self.Heroes)
-        self.decisionPanel.display(metrics, self._format_amount)
+        actor, metrics = action_decision(self.states, self.stateSlider.value(), self.Heroes)
+        self.decisionPanel.display(metrics, actor)
 
     def play_hand(self, handidx) -> None:  # noqa: F811
         if handidx < 0 or handidx >= len(self.handlist):
