@@ -1,5 +1,9 @@
 # Cartas PokerStars e apostas por assento
 
+A interface foi simplificada posteriormente para mesa e comandos, com uma
+faixa de SPR/pot odds/MDF; veja [Replayer simplificado](REPLAYER_DECISION_STRIP.md)
+para as capturas e a verificação atuais.
+
 ## Refinamento de 10 de outubro de 2026
 
 Esta etapa responde ao pedido de cartas com pips e figuras completas, fichas

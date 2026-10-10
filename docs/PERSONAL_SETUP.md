@@ -25,6 +25,9 @@ Git acima identifica precisamente o conjunto de funcionalidades incorporado.
   veja [REPLAYER_MANUAL_CONTROLS.md](REPLAYER_MANUAL_CONTROLS.md).
 - Apostas ancoradas ao dono, fichas maiores com denominações impressas e cartas
   completas da instalação local; veja [REPLAYER_POKERSTARS_CARDS.md](REPLAYER_POKERSTARS_CARDS.md).
+- Interface somente com mesa e comandos; SPR por street a partir do stack
+  efetivo, pot odds, sizing, MDF puro e FE mínima na faixa de decisão do Hero;
+  veja [REPLAYER_DECISION_STRIP.md](REPLAYER_DECISION_STRIP.md).
 
 ## Instalação Linux
 
