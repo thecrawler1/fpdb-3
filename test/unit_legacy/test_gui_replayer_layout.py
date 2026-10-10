@@ -179,7 +179,7 @@ def test_layout_reserves_header_controls_and_timeline():
         assert seat.panel_rect.bottom() <= control_top
         assert seat.cards_rect.top() >= HEADER_HEIGHT
         assert seat.cards_rect.bottom() <= control_top
-        assert not seat.panel_rect.intersects(seat.cards_rect)
+        assert seat.cards_rect.top() < seat.panel_rect.top() < seat.cards_rect.bottom() < seat.panel_rect.bottom()
         assert not seat.panel_rect.intersects(layout.board_rect)
 
 
@@ -194,7 +194,7 @@ def test_layout_keeps_short_windows_above_controls():
     for seat in layout.seats.values():
         assert seat.panel_rect.bottom() <= control_top
         assert seat.cards_rect.bottom() <= control_top
-        assert not seat.panel_rect.intersects(seat.cards_rect)
+        assert seat.cards_rect.top() < seat.panel_rect.top() < seat.cards_rect.bottom() < seat.panel_rect.bottom()
         assert abs(seat.cards_rect.center().x() - seat.panel_rect.center().x()) < 1
 
 
@@ -208,10 +208,11 @@ def test_layout_scales_cards_down_for_compact_windows():
 
 @pytest.mark.parametrize("size", [(800, 600), (1280, 720), (1600, 900), (1260, 1380)])
 @pytest.mark.parametrize("category", ["holdem", "6_omahahi", "studhilo"])
-def test_player_clusters_keep_cards_above_plaques_in_landscape_and_portrait(size, category):
+def test_player_clusters_keep_card_bottoms_behind_plaques_without_card_overlap(size, category):
     layout = build_replay_layout(*size, [f"p{i}" for i in range(5)], "p0", category)
     for seat in layout.seats.values():
-        assert seat.cards_rect.bottom() < seat.panel_rect.top()
+        assert seat.cards_rect.top() < seat.panel_rect.top() < seat.cards_rect.bottom() < seat.panel_rect.bottom()
+        assert layout.card_spacing >= layout.card_width + 4
         assert abs(seat.cards_rect.center().x() - seat.panel_rect.center().x()) < 1
         assert seat.cards_rect.top() >= HEADER_HEIGHT
         assert seat.panel_rect.bottom() < size[1] - CONTROL_RESERVED_HEIGHT

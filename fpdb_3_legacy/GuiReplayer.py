@@ -84,7 +84,8 @@ CARD_REFERENCE_RESERVED_HEIGHT = 252  # Original header and control reservation.
 TIMELINE_WIDTH = 280
 TIMELINE_MIN_WINDOW_WIDTH = 1500
 TABLE_MARGIN = 28
-CARD_SPACING_RATIO = 0.52
+CARD_GAP = 4
+CARD_PLAQUE_COVER_RATIO = .28
 MAX_VISIBLE_HOLE_CARDS = 7
 MIN_CARD_SCALE = 0.58
 CONTROL_BUTTON_MIN_WIDTH = 118
@@ -648,7 +649,7 @@ def build_replay_layout(
     card_scale = max(MIN_CARD_SCALE, min(1.0, reference_width / 880, reference_height / 520))
     card_width = int(CARD_WIDTH * card_scale)
     card_height = int(CARD_HEIGHT * card_scale)
-    card_spacing = card_width * CARD_SPACING_RATIO
+    card_spacing = card_width + CARD_GAP
 
     board_width = min(card_width * 5 + 20, table_width * 0.46)
     board_rect = QRectF(
@@ -689,7 +690,8 @@ def build_replay_layout(
     card_w = card_width + (num_cards - 1) * card_spacing
     card_h = card_height
 
-    cluster_gap = max(4, int(6 * card_scale))
+    # Cards are side by side; their lower portion sits behind the plaque.
+    cluster_gap = -max(12, int(card_height * CARD_PLAQUE_COVER_RATIO))
     badge_reserve = 32
 
     for index, name in enumerate(ordered_names):
@@ -1938,7 +1940,7 @@ class GuiReplayer(QWidget):
             return
         card_width = getattr(self, "render_card_width", self.cardwidth)
         card_height = getattr(self, "render_card_height", self.cardheight)
-        spacing = getattr(self, "render_card_spacing", card_width * CARD_SPACING_RATIO) if overlap else card_width + 4
+        spacing = getattr(self, "render_card_spacing", card_width + CARD_GAP) if overlap else card_width + CARD_GAP
         total_width = card_width + spacing * (len(cards) - 1)
         x = rect.center().x() - total_width / 2
         y = rect.y()
@@ -1972,7 +1974,7 @@ class GuiReplayer(QWidget):
             return
         card_width = getattr(self, "render_card_width", self.cardwidth)
         card_height = getattr(self, "render_card_height", self.cardheight)
-        spacing = getattr(self, "render_card_spacing", card_width * CARD_SPACING_RATIO)
+        spacing = getattr(self, "render_card_spacing", card_width + CARD_GAP)
         total_width = card_width + spacing * (len(cards) - 1)
         x = rect.center().x() - total_width / 2
         y = rect.y()
@@ -2037,7 +2039,7 @@ class GuiReplayer(QWidget):
         painter.save()
         painter.setOpacity(max(0.0, 1.0 - e))
         painter.translate(offset_x, offset_y)
-        spacing = card_w * 0.5
+        spacing = card_w + CARD_GAP
         total = card_w + spacing * (n - 1)
         x = cx - total / 2
         y = seat.cards_rect.y() - int(card_h * 0.12)

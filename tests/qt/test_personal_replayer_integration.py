@@ -329,6 +329,29 @@ def test_long_nickname_uses_entire_name_row_and_elides_before_stack_row(history_
     assert stack_call.args[-1] == replayer._format_amount(player.stack)
 
 
+def test_hole_cards_are_side_by_side_and_painted_before_the_covering_plaque(history_replayer, monkeypatch):
+    replayer = history_replayer
+    replayer._ensure_replayer_assets()
+    state = replayer.states[0]
+    player = next(p for p in replayer._frame_from_state(state).players if p.name == replayer.Heroes)
+    layout = build_replay_layout(1280, 720, list(state.players), replayer.Heroes, "holdem")
+    replayer.render_card_width = layout.card_width
+    replayer.render_card_height = layout.card_height
+    replayer.render_card_spacing = layout.card_spacing
+    painter = MagicMock()
+    painter.setFont.side_effect = lambda font: setattr(painter.fontMetrics, "return_value", QFontMetrics(font))
+    painted = []
+    monkeypatch.setattr(replayer, "_paint_card", lambda _p, _card, rect: painted.append(("card", QRectF(rect))))
+    painter.drawRoundedRect.side_effect = lambda rect, *_args: painted.append(("plaque", QRectF(rect)))
+    seat = layout.seats[player.name]
+    replayer._draw_player(painter, player, seat, layout, "PREFLOP", False)
+    cards = [rect for kind, rect in painted if kind == "card"]
+    assert len(cards) == 2
+    assert cards[0].right() + 4 <= cards[1].left()
+    assert all(rect.top() < seat.panel_rect.top() < rect.bottom() < seat.panel_rect.bottom() for rect in cards)
+    assert [kind for kind, _ in painted[:3]] == ["card", "card", "plaque"]
+
+
 def test_central_piles_do_not_double_count_outstanding_bets(history_replayer):
     replayer = history_replayer
     preflop = replayer.states[6]
