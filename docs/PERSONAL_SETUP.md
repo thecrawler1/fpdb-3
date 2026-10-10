@@ -12,14 +12,17 @@ Git acima identifica precisamente o conjunto de funcionalidades incorporado.
 
 ## Alterações
 
-- Efeitos sonoros no hand replayer, com opção **Sound** e controle de volume.
-- Preferências persistentes; volume inicial de 35%.
+- Efeitos sonoros no hand replayer, com opção **Sound** para ativar/silenciar.
+- Preferência de som persistente; volume local fixo em 100%, sem slider.
 - Efeitos carregados da instalação local do PokerStars: check, fold, aposta,
   raise, distribuição de cartas, pilha de fichas para all-in e entrega do pote.
 - Balanceamento de volume, preservando o timbre e o áudio estéreo.
-- Reprodução ao avançar manualmente ou usar Play. Voltar e saltar na linha do
+- Sons ao avançar manualmente. Voltar e saltar na linha do
   tempo não reproduz uma sequência de efeitos; fechar o replayer interrompe o áudio.
 - Comando de abertura, importador de mãos e atalho Linux reproduzíveis.
+- Controles manuais por ícones, tipografia ampliada e opção de valores em BB.
+- Fichas por denominação e potes físicos separados das apostas em andamento;
+  veja [REPLAYER_MANUAL_CONTROLS.md](REPLAYER_MANUAL_CONTROLS.md).
 
 ## Instalação Linux
 
