@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from time import monotonic, sleep
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -43,6 +44,7 @@ def main(argv=None) -> int:
         manifest = []
         scenarios = (
             ("preflop-1280.png", 1280, 720, "PREFLOP"),
+            ("actor-1280.png", 1280, 720, "ACTOR"),
             ("flop-1600.png", 1600, 900, "FLOP"),
             ("result-1280.png", 1280, 720, "RESULT"),
         )
@@ -50,11 +52,26 @@ def main(argv=None) -> int:
             replayer.resize(width, height)
             if street == "RESULT":
                 index = len(replayer.states) - 1
+            elif street == "ACTOR":
+                index = next(
+                    i
+                    for i, state in enumerate(replayer.states)
+                    if state.street == "PREFLOP"
+                    and any(
+                        player.name == hand.hero and player.justacted and player.action == "raises"
+                        for player in state.players.values()
+                    )
+                )
             else:
                 index = next(i for i, state in enumerate(replayer.states) if state.street == street)
             replayer.stateSlider.setValue(index)
             replayer.audio.stop()
             replayer.show()
+            # Capture settled frames, not transient folding/discard animation.
+            deadline = monotonic() + 0.6
+            while replayer._fold_timer.isActive() and monotonic() < deadline:
+                app.processEvents()
+                sleep(0.01)
             for _ in range(3):
                 app.processEvents()
             pixmap = replayer.grab()

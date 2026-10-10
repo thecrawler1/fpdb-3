@@ -395,12 +395,18 @@ def replay_is_phase(states: list[Any], index: int) -> bool:
     return index == 0 or states[index - 1].street != states[index].street
 
 
-def replay_action_text(player: Any, currency: str) -> str:
+def replay_action_text(player: Any, currency: str, previous: Any = None) -> str:
     suffix = " (all-in)" if player.allin and player.action != "collected" else ""
     amount = ""
     if player.chips and player.action not in {"folds", "checks"}:
-        amount = f" {format_replay_amount(player.chips, currency)}"
-    return f"{player.name}: {player.action}{amount}{suffix}"
+        contribution = player.chips
+        if player.action == "calls" and previous is not None:
+            # chips is the entire street contribution, not the amount of this
+            # call. Read the stack delta without changing the underlying state.
+            contribution = previous.stack - player.stack
+        amount = f" {format_replay_amount(contribution, currency)}"
+    action = "raises to" if player.action == "raises" else player.action
+    return f"{player.name}: {action}{amount}{suffix}"
 
 
 def replay_phase_text(street: str | None) -> str:
@@ -425,7 +431,8 @@ def replay_history_entries(states: list[Any], currency: str) -> list[ReplayHisto
             for player in state.players.values():
                 if player.justacted and player.action:
                     entries.append(ReplayHistoryEntry(
-                        index, street, replay_action_text(player, currency), "action", player.action,
+                        index, street, replay_action_text(player, currency, states[index - 1].players.get(player.name)),
+                        "action", player.action,
                     ))
         if getattr(state, "ended", False):
             entries.append(ReplayHistoryEntry(index, street, "Hand complete", "result"))
@@ -918,13 +925,16 @@ class GuiReplayer(QWidget):
         self.replayBox.addWidget(self.controls)
         self.previousHandButton = QPushButton(_("‹ Hand"))
         self.previousHandButton.setToolTip(_("Previous hand (Down)"))
+        self.previousHandButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.previousHandButton.clicked.connect(lambda: self.play_hand(self.handidx - 1))
         self.nextHandButton = QPushButton(_("Hand ›"))
         self.nextHandButton.setToolTip(_("Next hand (Up)"))
+        self.nextHandButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.nextHandButton.clicked.connect(lambda: self.play_hand(self.handidx + 1))
         self.playbackBox.insertWidget(0, self.previousHandButton)
         self.playbackBox.addWidget(self.nextHandButton)
         self.speedCombo = QComboBox()
+        self.speedCombo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         for speed in (0.5, 1, 1.5, 2):
             self.speedCombo.addItem(f"{speed:g}×", speed)
         self.speedCombo.setCurrentIndex(1)
@@ -2309,11 +2319,11 @@ class GuiReplayer(QWidget):
                         combinations.setdefault(player.name, "")
             for name, combo in combinations.items():
                 suffix = " (wins)" if name in collectees else ""
-                player = evaluated_players.get(name)
-                if player is not None and (player.hi_winner or player.lo_winner):
+                evaluated_player = evaluated_players.get(name)
+                if evaluated_player is not None and (evaluated_player.hi_winner or evaluated_player.lo_winner):
                     result = " / ".join(
                         part
-                        for part, won in (("HI winner", player.hi_winner), ("LO winner", player.lo_winner))
+                        for part, won in (("HI winner", evaluated_player.hi_winner), ("LO winner", evaluated_player.lo_winner))
                         if won
                     )
                     if combo:
@@ -2420,15 +2430,11 @@ class GuiReplayer(QWidget):
         if not acted:
             return "Hand complete" if complete else f"{(frame.street or 'Hand').capitalize()} review"
         player = acted[-1]
-        allin_suffix = " (all-in)" if player.allin and player.action != "collected" else ""
         if player.action == "collected" and player.chips:
             summary = f"{player.name} collected {format_replay_amount(player.chips, self.currency_code)}"
             return f"Hand complete · {summary}" if complete else summary
-        if player.chips and player.action not in {"folds", "checks"}:
-            amount = format_replay_amount(player.chips, self.currency_code)
-            summary = f"{player.name} {player.action} {amount}{allin_suffix}"
-        else:
-            summary = f"{player.name} {player.action}{allin_suffix}"
+        previous = self.states[index - 1].players.get(player.name) if index > 0 else None
+        summary = replay_action_text(player, self.currency_code, previous).replace(f"{player.name}: ", f"{player.name} ", 1)
         return f"Hand complete · {summary}" if complete else summary
 
     def _next_actor_name(self, current_index: int) -> str | None:

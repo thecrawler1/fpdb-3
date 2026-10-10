@@ -48,7 +48,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python tools/capture_replayer_review.py --ou
 ```
 
 O script usa uma fixture pública com jogadores fictícios e não conecta ao banco
-pessoal. Captura preflop compacto, flop com área ampla e resultado compacto.
+pessoal. Captura preflop compacto, ação do Hero, flop com área ampla e resultado compacto.
 `manifest.json` registra dimensões pedidas/reais e estado de cada imagem.
 
 ## Commits do piloto

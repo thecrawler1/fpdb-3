@@ -108,6 +108,12 @@ def test_replayer_controls_reserve_real_space(qtbot, legacy_config, monkeypatch,
     assert replayer.handidx == 1
     assert replayer.previousHandButton.isEnabled()
     assert not replayer.nextHandButton.isEnabled()
+    qtbot.keyClick(replayer, Qt.Key.Key_Right)
+    assert replayer.stateSlider.value() == 1
+    qtbot.keyClick(replayer, Qt.Key.Key_Space)
+    assert replayer.playing
+    qtbot.keyClick(replayer, Qt.Key.Key_Space)
+    assert not replayer.playing
     replayer.close()
 
 
@@ -150,6 +156,17 @@ def test_status_identifies_deal_and_complete_frames(history_replayer):
     replayer.end_clicked(False)
     frame = replayer._frame_from_state(replayer.states[-1])
     assert replayer._current_action_summary(frame) == "Hand complete · Player3 collected $17.50"
+
+
+def test_call_text_uses_action_amount_not_accumulated_street_contribution(history_replayer):
+    replayer = history_replayer
+    call = next(entry for entry in replayer._history_events() if entry.action == "calls")
+    assert call.text == "Hero: calls $5.53"
+    replayer.stateSlider.setValue(call.state_index)
+    state = replayer.states[call.state_index]
+    assert state.players["Hero"].chips == 8  # Canonical state remains untouched.
+    frame = replayer._frame_from_state(state)
+    assert replayer._current_action_summary(frame) == "Hero calls $5.53"
 
 
 def test_actor_emphasis_and_metrics_exclude_phase_copies(history_replayer, monkeypatch):

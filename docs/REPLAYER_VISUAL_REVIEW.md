@@ -76,6 +76,29 @@ variantes, estados, áudio, controles, status, seleção de histórico e seek.
 Os testes mantêm IDs, estados e cálculos do backend como fonte da apresentação.
 Correções e verificações finais adicionais serão registradas no commit de QA.
 
+### QA final
+
+- 81 testes direcionados passaram, incluindo compartilhamento e revisão preflop.
+- Geometria e controles verificados em 800×600, 1280×720 e 1600×900.
+- Seek por histórico compacto e lateral pausa a reprodução e preserva o índice original.
+- Foi corrigido um erro de apresentação herdado: calls agora exibem a contribuição
+  daquela ação, não o total acumulado na street; raises são identificados como
+  “raises to”. Os estados e cálculos do backend permanecem iguais.
+- O actor foi capturado numa ação real do Hero, complementando a evidência da
+  segunda rodada de avaliação.
+- Na instalação local, os sete efeitos originais do PokerStars carregaram e as
+  transições de 25 mãos reais foram verificadas, incluindo voltar, saltar e fechar.
+- Ruff e mypy aprovados nos módulos alterados e no script de captura.
+- Capturas HiDPI em escala 1,5× verificadas, com tamanhos lógicos preservados.
+
+Capturas finais geradas pelo script com a fixture pública:
+
+![Ação do Hero no replayer](images/replayer-modern/actor-1280.png)
+
+![Flop e histórico lateral](images/replayer-modern/flop-1600.png)
+
+![Mão concluída](images/replayer-modern/result-1280.png)
+
 ## Reprodução
 
 ```bash

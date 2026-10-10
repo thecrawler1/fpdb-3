@@ -1,0 +1,70 @@
+[
+  {
+    "image": "preflop-1280.png",
+    "requested": [
+      1280,
+      720
+    ],
+    "actual": [
+      1280,
+      720
+    ],
+    "pixels": [
+      1280,
+      720
+    ],
+    "state": 3,
+    "street": "PREFLOP"
+  },
+  {
+    "image": "actor-1280.png",
+    "requested": [
+      1280,
+      720
+    ],
+    "actual": [
+      1280,
+      720
+    ],
+    "pixels": [
+      1280,
+      720
+    ],
+    "state": 6,
+    "street": "ACTOR"
+  },
+  {
+    "image": "flop-1600.png",
+    "requested": [
+      1600,
+      900
+    ],
+    "actual": [
+      1600,
+      900
+    ],
+    "pixels": [
+      1600,
+      900
+    ],
+    "state": 11,
+    "street": "FLOP"
+  },
+  {
+    "image": "result-1280.png",
+    "requested": [
+      1280,
+      720
+    ],
+    "actual": [
+      1280,
+      720
+    ],
+    "pixels": [
+      1280,
+      720
+    ],
+    "state": 15,
+    "street": "RESULT"
+  }
+]
