@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import cast
 
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, QUrl
 
@@ -113,7 +112,7 @@ class ReplayerAudio(QObject):
         super().__init__(parent)
         self.settings = QSettings("fpdb", "replayer")
         self.enabled = self.settings.value("sound/enabled", True, type=bool)
-        self.volume = max(0, min(100, cast(int, self.settings.value("sound/volume", 35, type=int))))
+        self.volume = 100
         self.effects = {}
         try:
             paths = prepare_sounds(config)
@@ -134,12 +133,6 @@ class ReplayerAudio(QObject):
         self.settings.setValue("sound/enabled", enabled)
         if not enabled:
             self.stop()
-
-    def set_volume(self, volume: int) -> None:
-        self.volume = max(0, min(100, volume))
-        self.settings.setValue("sound/volume", self.volume)
-        for effect in self.effects.values():
-            effect.setVolume(self.volume / 100)
 
     def stop(self) -> None:
         for effect in self.effects.values():

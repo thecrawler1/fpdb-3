@@ -27,6 +27,7 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
     qtbot, importer, fresh_db, legacy_config, tmp_path, monkeypatch
 ):
     settings = QSettings(str(tmp_path / "sound.ini"), QSettings.Format.IniFormat)
+    settings.setValue("sound/volume", 12)
     monkeypatch.setattr(replayer_audio, "QSettings", lambda *args: settings)
     monkeypatch.setattr(replayer_audio, "prepare_sounds", lambda config: {})
     fixture = Path(__file__).parent.parent / "fixtures/hands/pokerstars/review/nl_3bet_6max.txt"
@@ -56,20 +57,15 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
 
     qtbot.mouseClick(replayer.soundCheck, Qt.MouseButton.LeftButton, pos=QPoint(8, replayer.soundCheck.height() // 2))
     assert not replayer.audio.enabled
-    assert not replayer.soundVolume.isEnabled()
     assert settings.value("sound/enabled", type=bool) is False
     replayer.soundCheck.setChecked(True)
-    replayer.soundVolume.setValue(48)
-    assert replayer.audio.volume == 48
-    assert settings.value("sound/volume", type=int) == 48
-    replayer.play_clicked(False)
-    assert replayer.playTimer.isActive()
-    replayer.speedCombo.setCurrentIndex(3)
-    assert replayer.playTimer.interval() == 350
+    assert replayer.audio.volume == 100
+    assert not hasattr(replayer, "soundVolume")
+    assert not hasattr(replayer, "playPauseButton")
+    assert not hasattr(replayer, "playTimer")
     assert not replayer.previousHandButton.isEnabled()
     assert not replayer.nextHandButton.isEnabled()
     replayer.close()
-    assert not replayer.playTimer.isActive()
 
 
 @pytest.mark.parametrize("size", [(800, 600), (1280, 720), (1600, 900)])
@@ -90,9 +86,9 @@ def test_replayer_controls_reserve_real_space(qtbot, legacy_config, monkeypatch,
     assert replayer.controls.y() >= size[1] - CONTROL_RESERVED_HEIGHT
     controls = [
         replayer.stateSlider, *replayer.streetButtons.values(), replayer.startButton,
-        replayer.prevButton, replayer.playPauseButton, replayer.nextButton, replayer.endButton,
-        replayer.previousHandButton, replayer.nextHandButton, replayer.speedCombo,
-        replayer.showCards, replayer.soundCheck, replayer.soundVolume, replayer.deckTypeCombo,
+        replayer.prevButton, replayer.nextButton, replayer.endButton,
+        replayer.previousHandButton, replayer.nextHandButton,
+        replayer.showCards, replayer.soundCheck, replayer.deckTypeCombo,
     ]
     rects = []
     for widget in controls:
@@ -111,9 +107,11 @@ def test_replayer_controls_reserve_real_space(qtbot, legacy_config, monkeypatch,
     qtbot.keyClick(replayer, Qt.Key.Key_Right)
     assert replayer.stateSlider.value() == 1
     qtbot.keyClick(replayer, Qt.Key.Key_Space)
-    assert replayer.playing
+    assert replayer.stateSlider.value() == 2
     qtbot.keyClick(replayer, Qt.Key.Key_Space)
-    assert not replayer.playing
+    assert replayer.stateSlider.value() == 3
+    qtbot.wait(800)
+    assert replayer.stateSlider.value() == 3
     replayer.close()
 
 
@@ -208,14 +206,12 @@ def test_compact_history_access_and_exact_seek(qtbot, history_replayer, size):
     item = replayer.historyList.item(phase_row)
     replayer.historyList.scrollToItem(item)
     qtbot.wait(1)
-    replayer.play_clicked(False)
     qtbot.mouseClick(
         replayer.historyList.viewport(), Qt.MouseButton.LeftButton,
         pos=replayer.historyList.visualItemRect(item).center(),
     )
     assert replayer.stateSlider.value() == item.data(Qt.ItemDataRole.UserRole)
     assert replayer.states[replayer.stateSlider.value()].street == "FLOP"
-    assert not replayer.playing
     replayer.stateSlider.setValue(3)
     assert replayer.historyList.currentItem().data(Qt.ItemDataRole.UserRole) == 3
     replayer.historyDialog.close()
@@ -230,6 +226,25 @@ def test_wide_timeline_seeks_to_original_state(qtbot, history_replayer):
     rect, index = next((rect, index) for rect, index in replayer._timeline_hit_regions if index == 3)
     qtbot.mouseClick(replayer, Qt.MouseButton.LeftButton, pos=rect.center().toPoint())
     assert replayer.stateSlider.value() == 3
+
+
+def test_transport_press_feedback_preserves_hit_area_and_release_click(qtbot, history_replayer):
+    replayer = history_replayer
+    button = replayer.nextButton
+    assert not button.icon().isNull()
+    assert button.accessibleName()
+    original_rect = button.geometry()
+    qtbot.mousePress(button, Qt.MouseButton.LeftButton)
+    qtbot.wait(100)
+    assert button.press_progress > .9
+    assert button.iconSize().width() < 30
+    assert button.geometry() == original_rect
+    assert replayer.stateSlider.value() == 0
+    qtbot.mouseRelease(button, Qt.MouseButton.LeftButton)
+    assert replayer.stateSlider.value() == 1
+    qtbot.wait(160)
+    assert button.press_progress == 0
+    assert button.iconSize().width() == 30
 
 
 @pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])

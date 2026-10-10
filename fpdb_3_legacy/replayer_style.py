@@ -8,9 +8,15 @@ QPushButton:hover { background: #303640; }
 QPushButton:pressed { background: #3b434e; }
 QPushButton:focus { border-color: #78d9a0; }
 QPushButton:disabled { color: #707986; background: #181b21; border-color: #252a32; }
-QPushButton[primary="true"] { background: #78d9a0; color: #101b15; border-color: #78d9a0; }
-QPushButton[primary="true"]:hover { background: #98e5b7; }
-QPushButton[streetActive="true"] { background: #293b32; color: #98e5b7; border-color: #435e50; }
+QPushButton[transport="true"] { min-height: 0px; max-height: 80px; padding: 0px; border-radius: 10px; background: #29313b; }
+QPushButton[transport="true"]:hover { background: #3e4956; border-color: #8793a1; }
+QPushButton[transport="true"]:pressed { background: #192029; border-color: #c5cdd6; }
+QPushButton[primary="true"] { background: #a94752; border-color: #ba5964; }
+QPushButton[primary="true"]:hover { background: #bb5560; border-color: #dd8991; }
+QPushButton[primary="true"]:pressed { background: #823741; border-color: #efafb5; }
+QPushButton[transport="true"]:disabled { background: #181e25; border-color: #252a32; }
+QPushButton[primary="true"]:disabled { background: #181e25; border-color: #252a32; }
+QPushButton[streetActive="true"] { background: #30313b; color: #eef1f5; border-color: #96616a; }
 QCheckBox { spacing: 7px; color: #a6afbc; }
 QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #596372; border-radius: 3px; background: #22262e; }
 QCheckBox::indicator:checked, QCheckBox::indicator:checked:enabled { background: #78d9a0; border-color: #78d9a0; image: none; }

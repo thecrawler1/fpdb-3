@@ -51,6 +51,7 @@ from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.replayer_audio import ReplayerAudio, transition_sound
+from fpdb_3_legacy.replayer_controls import ReplayControlButton
 from fpdb_3_legacy.replayer_style import REPLAYER_STYLE
 
 # import L10n
@@ -798,26 +799,19 @@ class GuiReplayer(QWidget):
         self.setLayout(self.replayBox)
 
         # Buttons
-        self.prevButton = QPushButton(_("Prev"))
-        self.prevButton.setToolTip(_("Previous action"))
+        self.prevButton = ReplayControlButton("previous", _("Previous action (Left)"))
         self.prevButton.clicked.connect(self.prev_clicked)
         self.prevButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self.startButton = QPushButton(_("Start"))
+        self.startButton = ReplayControlButton("start", _("Start of hand (Home)"))
         self.startButton.clicked.connect(self.start_clicked)
         self.startButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self.endButton = QPushButton(_("End"))
+        self.endButton = ReplayControlButton("end", _("End of hand (End)"))
         self.endButton.clicked.connect(self.end_clicked)
         self.endButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self.playPauseButton = QPushButton(_("Play"))
-        self.playPauseButton.clicked.connect(self.play_clicked)
-        self.playPauseButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.playPauseButton.setProperty("primary", True)
-
-        self.nextButton = QPushButton(_("Next"))
-        self.nextButton.setToolTip(_("Next action"))
+        self.nextButton = ReplayControlButton("next", _("Next action (Right / Space)"))
         self.nextButton.clicked.connect(self.next_clicked)
         self.nextButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
@@ -827,7 +821,6 @@ class GuiReplayer(QWidget):
         self.playbackBox.setSpacing(6)
         self.playbackBox.addWidget(self.startButton)
         self.playbackBox.addWidget(self.prevButton)
-        self.playbackBox.addWidget(self.playPauseButton)
         self.playbackBox.addWidget(self.nextButton)
         self.playbackBox.addWidget(self.endButton)
 
@@ -850,15 +843,6 @@ class GuiReplayer(QWidget):
         self.soundCheck.setChecked(self.audio.enabled)
         self.soundCheck.toggled.connect(self.audio.set_enabled)
         self.buttonBox2.addWidget(self.soundCheck)
-        self.soundVolume = QSlider(Qt.Orientation.Horizontal)
-        self.soundVolume.setRange(0, 100)
-        self.soundVolume.setValue(self.audio.volume)
-        self.soundVolume.setFixedWidth(90)
-        self.soundVolume.setToolTip(_("Sound volume"))
-        self.soundVolume.valueChanged.connect(self.audio.set_volume)
-        self.soundVolume.setEnabled(self.audio.enabled)
-        self.soundCheck.toggled.connect(self.soundVolume.setEnabled)
-        self.buttonBox2.addWidget(self.soundVolume)
 
         self.deckLabel = QLabel(_("Deck:"))
         self.deckLabel.setStyleSheet("font-weight: 600; color: #9aa5ad; margin-left: 10px;")
@@ -919,38 +903,32 @@ class GuiReplayer(QWidget):
         controls_layout.setContentsMargins(8, 0, 8, 0)
         controls_layout.setSpacing(4)
         controls_layout.addWidget(self.stateSlider)
-        controls_layout.addLayout(self.buttonBox)
-        controls_layout.addLayout(self.playbackBox)
+        navigation = QHBoxLayout()
+        navigation.setSpacing(24)
+        navigation.addStretch()
+        navigation.addLayout(self.playbackBox)
+        navigation.addLayout(self.buttonBox)
+        navigation.addStretch()
+        controls_layout.addLayout(navigation)
         controls_layout.addLayout(self.buttonBox2)
         self.replayBox.addWidget(self.controls)
-        self.previousHandButton = QPushButton(_("‹ Hand"))
+        self.previousHandButton = ReplayControlButton("previous-hand", _("Previous hand (Down)"))
         self.previousHandButton.setToolTip(_("Previous hand (Down)"))
         self.previousHandButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.previousHandButton.clicked.connect(lambda: self.play_hand(self.handidx - 1))
-        self.nextHandButton = QPushButton(_("Hand ›"))
+        self.nextHandButton = ReplayControlButton("next-hand", _("Next hand (Up)"))
         self.nextHandButton.setToolTip(_("Next hand (Up)"))
         self.nextHandButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.nextHandButton.clicked.connect(lambda: self.play_hand(self.handidx + 1))
         self.playbackBox.insertWidget(0, self.previousHandButton)
         self.playbackBox.addWidget(self.nextHandButton)
-        self.speedCombo = QComboBox()
-        self.speedCombo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        for speed in (0.5, 1, 1.5, 2):
-            self.speedCombo.addItem(f"{speed:g}×", speed)
-        self.speedCombo.setCurrentIndex(1)
-        self.speedCombo.setToolTip(_("Playback speed"))
-        self.speedCombo.currentIndexChanged.connect(self._playback_speed_changed)
-        self.playbackBox.addWidget(self.speedCombo)
         self.buttonBox2.insertStretch(0)
         self.buttonBox2.addStretch()
         self.stateSlider.setFixedHeight(16)
         for button in self.findChildren(QPushButton):
-            button.setFixedHeight(32)
+            if not isinstance(button, ReplayControlButton):
+                button.setFixedHeight(32)
         self.deckTypeCombo.setFixedHeight(30)
-        self.speedCombo.setFixedHeight(32)
-        self.soundVolume.setFixedHeight(16)
-
-        self.playing = False
 
         # Fold animation state: {player_name: start_monotonic_time}
         self._fold_anim: dict[str, Any] = {}
@@ -2417,8 +2395,6 @@ class GuiReplayer(QWidget):
                 break
 
     def _history_seek(self, item: QListWidgetItem) -> None:
-        if self.playing:
-            self.play_clicked(False)
         self.stateSlider.setValue(item.data(Qt.ItemDataRole.UserRole))
 
     def _current_action_summary(self, frame: ReplayFrame) -> str:
@@ -2548,7 +2524,7 @@ class GuiReplayer(QWidget):
             painter.drawText(
                 QRectF(rect.x() + 12, rect.y() + 28, rect.width() - 24, 20),
                 Qt.AlignmentFlag.AlignLeft,
-                "← → Actions   ·   Space Play / pause   ·   ↑ ↓ Hands",
+                "← → Actions   ·   Space Next action   ·   ↑ ↓ Hands",
             )
             return
 
@@ -2638,8 +2614,6 @@ class GuiReplayer(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             for rect, index in getattr(self, "_timeline_hit_regions", []):
                 if rect.contains(event.position()):
-                    if self.playing:
-                        self.play_clicked(False)
                     self.stateSlider.setValue(index)
                     event.accept()
                     return
@@ -2796,16 +2770,6 @@ class GuiReplayer(QWidget):
                 config=self.conf,
             ).exec()
 
-    def increment_state(self) -> None:  # noqa: F811
-        if self.stateSlider.value() >= self.stateSlider.maximum():
-            self.playing = False
-            self.playPauseButton.setText("Play")
-            if getattr(self, "playTimer", None):
-                self.playTimer.stop()
-            return
-        if self.playing:
-            self.stateSlider.setValue(self.stateSlider.value() + 1)
-
     _FOLD_DURATION = 0.45  # seconds
 
     def slider_changed(self, value) -> None:  # noqa: F811
@@ -2867,32 +2831,13 @@ class GuiReplayer(QWidget):
             return None
         return max(0.0, min(1.0, (time.monotonic() - t0) / self._FOLD_DURATION))
 
-    def play_clicked(self, checkState) -> None:  # noqa: F811
-        self.playing = not self.playing
-        if not getattr(self, "playTimer", None):
-            self.playTimer = QTimer()
-            self.playTimer.timeout.connect(self.increment_state)
-        if self.playing:
-            self.playPauseButton.setText("Pause")
-            self.playTimer.start(self._playback_interval())
-        else:
-            self.playPauseButton.setText("Play")
-            self.playTimer.stop()
-
-    def _playback_interval(self) -> int:
-        return round(700 / float(self.speedCombo.currentData()))
-
-    def _playback_speed_changed(self) -> None:
-        if getattr(self, "playTimer", None):
-            self.playTimer.setInterval(self._playback_interval())
-
     def keyPressEvent(self, event) -> None:  # noqa: F811
         if event.key() == Qt.Key.Key_Left:
             self.stateSlider.setValue(max(0, self.stateSlider.value() - 1))
         elif event.key() == Qt.Key.Key_Right:
             self.stateSlider.setValue(min(self.stateSlider.maximum(), self.stateSlider.value() + 1))
         elif event.key() == Qt.Key.Key_Space:
-            self.play_clicked(False)
+            self.next_clicked(False)
         elif event.key() == Qt.Key.Key_Home:
             self.stateSlider.setValue(0)
         elif event.key() == Qt.Key.Key_End:
@@ -2913,9 +2858,6 @@ class GuiReplayer(QWidget):
         if getattr(self, "historyDialog", None):
             self.historyDialog.close()
         self.audio.stop()
-        self.playing = False
-        if getattr(self, "playTimer", None):
-            self.playTimer.stop()
         self._fold_timer.stop()
         super().closeEvent(event)
 
