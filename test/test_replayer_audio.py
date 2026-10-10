@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from fpdb_3_legacy import replayer_audio
 
 
@@ -50,6 +52,6 @@ def test_failed_conversion_does_not_publish_partial_audio(tmp_path, monkeypatch)
         raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(replayer_audio.subprocess, "run", fail)
-    audio = replayer_audio.ReplayerAudio(config=config)
-    assert not audio.effects
+    with pytest.raises(subprocess.CalledProcessError):
+        replayer_audio.prepare_sounds(config)
     assert not list(cache.rglob("*.wav"))

@@ -116,9 +116,12 @@ class ReplayerAudio(QObject):
         self.volume = max(0, min(100, cast(int, self.settings.value("sound/volume", 35, type=int))))
         self.effects = {}
         try:
+            paths = prepare_sounds(config)
+            if not paths:
+                return
             from PySide6.QtMultimedia import QSoundEffect
 
-            for name, path in prepare_sounds(config).items():
+            for name, path in paths.items():
                 effect = QSoundEffect(self)
                 effect.setVolume(self.volume / 100)
                 effect.setSource(QUrl.fromLocalFile(str(path)))
