@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, QUrl
 
@@ -112,7 +113,7 @@ class ReplayerAudio(QObject):
         super().__init__(parent)
         self.settings = QSettings("fpdb", "replayer")
         self.enabled = self.settings.value("sound/enabled", True, type=bool)
-        self.volume = max(0, min(100, self.settings.value("sound/volume", 35, type=int)))
+        self.volume = max(0, min(100, cast(int, self.settings.value("sound/volume", 35, type=int))))
         self.effects = {}
         try:
             from PySide6.QtMultimedia import QSoundEffect
@@ -142,7 +143,7 @@ class ReplayerAudio(QObject):
             effect.stop()
 
     def play(self, name: str | None) -> None:
-        effect = self.effects.get(name)
+        effect = self.effects.get(name) if name is not None else None
         if self.enabled and self.volume and effect is not None and effect.isLoaded():
             # Let different actions finish their natural tails instead of cutting
             # off the previous sample whenever the next action appears.

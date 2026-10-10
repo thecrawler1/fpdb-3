@@ -84,6 +84,7 @@ class ModernHudPreferences(QDialog):
     def __init__(self, config, parent=None) -> None:
         super().__init__(parent)
         self.config = config
+        self.panel_rules: list[Any] = []
         self.setWindowTitle(_("HUD Preferences"))
         # The size is applied at the end of __init__, once the content is known;
         # see the ``fit_window`` call there.
@@ -109,6 +110,7 @@ class ModernHudPreferences(QDialog):
         profile_bar.setSpacing(10)
 
         profile_label = QLabel(_("Active Profile:"))
+        self._profile_label = profile_label
         profile_label.setProperty("class", "subtitle")
         profile_bar.addWidget(profile_label)
 
@@ -141,6 +143,12 @@ class ModernHudPreferences(QDialog):
 
         self.import_profile_btn = QPushButton(_("📥 Import HUD"))
         self.import_profile_btn.clicked.connect(self.import_profile)
+
+        # Font metrics differ across desktops: these buttons can demand more
+        # than the nominal 900 px breakpoint. Do not let their minimum hints
+        # prevent the resize event that folds them into the actions menu.
+        for button in self._profile_action_buttons():
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 
         profile_bar.addWidget(self.add_profile_btn)
         profile_bar.addWidget(self.dup_profile_btn)
@@ -3311,7 +3319,7 @@ class ModernHudPreferences(QDialog):
 
         # The state first: the widget builders below ask for the known panels and
         # the stat choices, and both read it.
-        self.panel_rules: list[Any] = list(getattr(self.config, "get_hud_panel_rules", lambda: [])())
+        self.panel_rules = list(getattr(self.config, "get_hud_panel_rules", lambda: [])())
         self.panel_rules_fallback = str(getattr(self.config, "hud_panel_fallback", "") or "")
         self.panel_stat_choices: tuple[Any, ...] = ()
 
@@ -3502,7 +3510,14 @@ class ModernHudPreferences(QDialog):
         many clicks they cost, and it is what lets the dialog be narrowed past
         the width the buttons need.
         """
-        wide = width >= NARROW_HEADER_WIDTH
+        natural_width = (
+            self._profile_label.sizeHint().width()
+            + self.profile_combo.minimumWidth()
+            + sum(button.sizeHint().width() for button in self._profile_action_buttons())
+            + 70  # Dialog and header horizontal margins.
+            + 70  # Seven inter-widget gaps in the profile row.
+        )
+        wide = width >= max(NARROW_HEADER_WIDTH, natural_width)
         for button in self._profile_action_buttons():
             button.setVisible(wide)
         self.profile_actions_btn.setVisible(not wide)

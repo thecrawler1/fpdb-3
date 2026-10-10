@@ -3,6 +3,13 @@
 Este fork mantém as personalizações na branch `personal`, baseada inicialmente
 na versão upstream **v3.9.1**.
 
+A integração de 9 de outubro de 2026 incorpora a `development` até o commit
+`84213a3e6fa97ff0f0994ae593e08cb4262ef05a` (3 de outubro). Ela inclui Study Explorer,
+Research Browser, filtros avançados, análises de sessões, Session Guard, os novos
+HUDs e compartilhamento/revisão de mãos, preservando nossos sons. A aplicação
+ainda informa `3.9.1`, pois o upstream não publicou uma nova versão; a referência
+Git acima identifica precisamente o conjunto de funcionalidades incorporado.
+
 ## Alterações
 
 - Efeitos sonoros no hand replayer, com opção **Sound** e controle de volume.
@@ -16,7 +23,7 @@ na versão upstream **v3.9.1**.
 
 ## Instalação Linux
 
-Pré-requisitos: Git, `uv`, compilador C, CMake e `ffmpeg`. Python 3.13 é a versão
+Pré-requisitos: Git, **`uv` 0.12.7**, compilador C, CMake e `ffmpeg`. Python 3.13 é a versão
 usada nesta instalação; `uv` pode baixar o interpretador automaticamente.
 
 ```bash
@@ -27,12 +34,37 @@ Dentro do diretório do clone:
 
 ```bash
 git switch personal
-uv venv --python 3.13 .venv
-uv pip install --python .venv/bin/python -e '.[linux]'
+uv sync --python 3.13 --extra linux --frozen
 ```
 
 O ambiente `.venv` pertence a este clone. Se mover o clone, recrie o ambiente e
 instale novamente os launchers.
+
+Para executar os testes, inclua as dependências de desenvolvimento:
+
+```bash
+uv sync --python 3.13 --extra linux --extra test --frozen
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -m qt
+```
+
+A CI do fork também executa nos pushes e pull requests para `personal`.
+
+### Atualizar um banco existente
+
+Feche a aplicação e mantenha um backup consistente do banco SQLite e da
+configuração antes de executar a versão integrada. A conexão adiciona as novas
+tabelas e colunas. Para habilitar os estudos sobre mãos já importadas:
+
+```bash
+.venv/bin/python tools/analytics_rebuild.py --config ~/.fpdb/HUD_config.xml --all
+.venv/bin/python tools/analytics_rebuild.py --config ~/.fpdb/HUD_config.xml --status
+```
+
+Os cinco subsistemas devem indicar `current`. A operação também está disponível
+em **Database → Rebuild Analytics Data**. Ela deriva os novos dados a partir das
+mãos armazenadas, preservando seus IDs. Não use `--recreate-tables` ao atualizar
+um banco existente.
 
 ### Configurar o PokerStars
 
