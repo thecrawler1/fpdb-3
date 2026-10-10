@@ -25,9 +25,9 @@ class DecisionPanel(QWidget):
         self.setObjectName("decisionPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(76)
-        self.setStyleSheet("QWidget#decisionPanel {background:#171e24; border:1px solid #303640; border-radius:7px;}")
+        self.setStyleSheet("QWidget#decisionPanel {background:#171e24; border:none; border-radius:0px;}")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 5, 12, 5)
+        layout.setContentsMargins(22, 5, 22, 5)
         layout.setSpacing(16)
         self.labels = [QLabel(self) for _ in range(3)]
         for label in self.labels:

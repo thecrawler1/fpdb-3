@@ -835,7 +835,7 @@ class GuiReplayer(QWidget):
         self.setWindowTitle(_("FPDB Hand Replayer"))
 
         self.replayBox = QVBoxLayout()
-        self.replayBox.setContentsMargins(10, 4, 10, 10)
+        self.replayBox.setContentsMargins(0, 0, 0, 10)
         self.replayBox.setSpacing(4)
         self.setLayout(self.replayBox)
 
@@ -952,7 +952,7 @@ class GuiReplayer(QWidget):
         self.controls = QWidget(self)
         self.controls.setFixedHeight(CONTROL_RESERVED_HEIGHT - 14)
         controls_layout = QVBoxLayout(self.controls)
-        controls_layout.setContentsMargins(8, 0, 8, 0)
+        controls_layout.setContentsMargins(18, 0, 18, 0)
         controls_layout.setSpacing(4)
         controls_layout.addWidget(self.stateSlider)
         navigation = QHBoxLayout()

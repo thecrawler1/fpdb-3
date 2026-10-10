@@ -7,6 +7,9 @@ O header visual antigo foi removido integralmente: modalidade/stake, site, ID da
 contagem de passos, dicas e os botões Actions/Share/Solver review. A timeline
 lateral também deixa de ocupar a janela larga.
 
+A superfície ocupa toda a largura e encosta no topo e nas laterais, sem
+margem externa, borda ou cantos arredondados. O texto mantém espaçamento interno.
+
 A faixa de decisão fica no topo da janela, em três posições fixas:
 
 1. **Contexto:** call, bet ou investimento novo do raise, com sizing em % do pote.

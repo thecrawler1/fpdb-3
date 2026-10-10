@@ -243,7 +243,9 @@ def test_wide_replayer_has_only_table_and_commands_without_header_or_timeline(qt
     assert replayer.decisionPanel.isVisible()
     assert replayer.decisionPanel.parent() is replayer
     assert replayer.decisionPanel.geometry().bottom() < replayer.controls.geometry().top()
-    assert replayer.decisionPanel.geometry().top() <= 10
+    assert replayer.decisionPanel.geometry().top() == 0
+    assert replayer.decisionPanel.geometry().left() == 0
+    assert replayer.decisionPanel.width() == replayer.width()
     for mock in removed:
         mock.assert_not_called()
 
