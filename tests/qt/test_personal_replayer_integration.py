@@ -1,13 +1,19 @@
 """Keep personal sound controls compatible with upstream share/solver features."""
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtGui import QContextMenuEvent, QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import QMenu, QTableView, QWidget
 
 from fpdb_3_legacy import replayer_audio
+from fpdb_3_legacy.GuiHandViewer import GuiHandViewer
 from fpdb_3_legacy.GuiReplayer import GuiReplayer
+from fpdb_3_legacy.GuiTourHandViewer import TourHandViewer
+from fpdb_3_legacy.PokerStarsToFpdb import PokerStars
 
 pytestmark = pytest.mark.qt
 
@@ -43,9 +49,7 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
     assert len(sounds) == 1
     assert replayer.preflop_actions_shown() > 0
 
-    qtbot.mouseClick(
-        replayer.soundCheck, Qt.MouseButton.LeftButton, pos=QPoint(8, replayer.soundCheck.height() // 2)
-    )
+    qtbot.mouseClick(replayer.soundCheck, Qt.MouseButton.LeftButton, pos=QPoint(8, replayer.soundCheck.height() // 2))
     assert not replayer.audio.enabled
     assert not replayer.soundVolume.isEnabled()
     assert settings.value("sound/enabled", type=bool) is False
@@ -57,3 +61,33 @@ def test_sound_controls_coexist_with_sharing_and_solver_review(
     assert replayer.playTimer.isActive()
     replayer.close()
     assert not replayer.playTimer.isActive()
+
+
+@pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])
+def test_hand_viewer_context_menu_accepts_a_real_qt_event(qtbot, legacy_config, monkeypatch, viewer_class):
+    fixture = Path(__file__).parent.parent / "fixtures/hands/pokerstars/review/nl_3bet_6max.txt"
+    hand = PokerStars(config=legacy_config, in_path=str(fixture), autostart=True).getProcessedHands()[0]
+    host = QWidget()
+    qtbot.addWidget(host)
+    host.view = QTableView(host)
+    model = QStandardItemModel(host)
+    model.appendRow(QStandardItem("7"))
+    host.view.setModel(model)
+    host.view.setCurrentIndex(model.index(0, 0))
+    host.hands = {7: hand}
+    host.colnum = {"HandId": 0}
+    host.config = legacy_config
+    host.copyHandToClipboard = lambda *args, **kwargs: None
+    menus = []
+
+    class RecordingMenu(QMenu):
+        def exec(self):
+            menus.append(self)
+
+    monkeypatch.setattr(sys.modules[viewer_class.__module__], "QMenu", RecordingMenu)
+    position = QPoint(70, 80)
+    event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(4, 4), position)
+    viewer_class.contextMenu(host, event)
+    assert len(menus) == 1
+    assert menus[0].pos() == position
+    assert any("Solver review" in action.text() for action in menus[0].actions())

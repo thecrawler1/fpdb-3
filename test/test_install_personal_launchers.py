@@ -2,7 +2,11 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from tools import install_personal_launchers as installer
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Linux launchers require POSIX shell and permissions")
 
 
 def test_launcher_preserves_paths_and_arguments_with_shell_characters(tmp_path, monkeypatch):

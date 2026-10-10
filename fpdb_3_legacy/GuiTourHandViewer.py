@@ -447,7 +447,7 @@ class TourHandViewer(QSplitter):
         add_share_actions(m, hand, self)
         m.addSeparator()
         add_review_action(m, hand, self, fpdb_hand_id=hand_id, config=self.config)
-        m.move(event.globalPosition().toPoint())
+        m.move(event.globalPos())
         m.exec()
 
     def filter_cards_cb(self, card) -> None:

@@ -73,6 +73,10 @@ O fork corrige o dimensionamento dos botões para permitir uma janela estreita,
 mantendo as ações no menu responsivo. Há também um teste de integração específico
 para preservar os sons junto dos novos botões de compartilhamento e solver.
 
+O fork também corrige o menu de contexto dos visualizadores de mãos cash e de
+torneios: `QContextMenuEvent.globalPos()` substitui a chamada incompatível com
+esse evento do Qt. Dois testes usam eventos reais para verificar o menu.
+
 O PreflopAdvisor é um aplicativo externo: a integração e os dados de revisão são
 testados aqui; abrir uma análise de solver requer esse aplicativo instalado.
 

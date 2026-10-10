@@ -781,7 +781,7 @@ class GuiReplayer(QWidget):
         self.buttonBox2.addWidget(self.showCards)
 
         self.audio = ReplayerAudio(self, config=self.conf)
-        self._sound_frame_index = None
+        self._sound_frame_index: int | None = None
         self.soundCheck = QCheckBox(_("Sound"))
         self.soundCheck.setToolTip(_("Original PokerStars chip and card sounds during playback"))
         self.soundCheck.setChecked(self.audio.enabled)
