@@ -27,7 +27,7 @@ from typing import Any
 
 import defusedxml.minidom
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QHelpEvent, QImage, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSlider,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -45,12 +46,14 @@ from PySide6.QtWidgets import (
 from fpdb_3_legacy import SQL, Card, Configuration, Database, Deck, Hand
 from fpdb_3_legacy.equity import EquityUnavailableError, calculate_equity
 from fpdb_3_legacy.hand_review_dialog import HandReviewDialog
+from fpdb_3_legacy.hand_share import big_blind, supports_bb_amounts
 from fpdb_3_legacy.hand_share_dialog import HandShareDialog
 from fpdb_3_legacy.http_capture_ofc import OFCHand, build_ofc_hand, load_ofc_hand
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.replayer_audio import ReplayerAudio, transition_sound
+from fpdb_3_legacy.replayer_chip_renderer import draw_chip_amount
 from fpdb_3_legacy.replayer_controls import ReplayControlButton
 from fpdb_3_legacy.replayer_style import FONT_SCALE, REPLAYER_STYLE, replay_font
 
@@ -83,8 +86,12 @@ def _is_real_card(card: str) -> bool:
     return bool(card) and card not in {"0", "0x"} and len(card) == 2 and card[0] in _RANK_VALUE
 
 
-def format_replay_amount(value: Decimal | int | float, currency: str) -> str:
+def format_replay_amount(value: Decimal | int | float, currency: str, blind: Decimal | None = None) -> str:
     """Format real money with its currency and tournament/play chips as numbers."""
+    if blind is not None and blind.is_finite() and blind > 0:
+        amount = Decimal(str(value)) / blind
+        decimals = 0 if amount == amount.to_integral_value() else max(2, 1 - amount.copy_abs().adjusted())
+        return f"{format_number(amount, decimals)} BB"
     if currency in {"", "T$", "play"}:
         return format_number(value)
     return format_currency(value, currency)
@@ -390,6 +397,13 @@ class ReplayHistoryEntry:
     text: str
     kind: str
     action: str = ""
+    amount: Decimal | None = None
+
+
+def replay_action_amount(player: Any, previous: Any = None) -> Decimal | None:
+    if not player.chips or player.action in {"folds", "checks"}:
+        return None
+    return previous.stack - player.stack if player.action == "calls" and previous is not None else player.chips
 
 
 def replay_is_phase(states: list[Any], index: int) -> bool:
@@ -397,16 +411,12 @@ def replay_is_phase(states: list[Any], index: int) -> bool:
     return index == 0 or states[index - 1].street != states[index].street
 
 
-def replay_action_text(player: Any, currency: str, previous: Any = None) -> str:
+def replay_action_text(player: Any, currency: str, previous: Any = None, *, blind: Decimal | None = None) -> str:
     suffix = " (all-in)" if player.allin and player.action != "collected" else ""
     amount = ""
-    if player.chips and player.action not in {"folds", "checks"}:
-        contribution = player.chips
-        if player.action == "calls" and previous is not None:
-            # chips is the entire street contribution, not the amount of this
-            # call. Read the stack delta without changing the underlying state.
-            contribution = previous.stack - player.stack
-        amount = f" {format_replay_amount(contribution, currency)}"
+    contribution = replay_action_amount(player, previous)
+    if contribution is not None:
+        amount = f" {format_replay_amount(contribution, currency, blind)}"
     action = "raises to" if player.action == "raises" else player.action
     return f"{player.name}: {action}{amount}{suffix}"
 
@@ -421,7 +431,17 @@ def replay_phase_text(street: str | None) -> str:
     return f"{street.capitalize()} dealt"
 
 
-def replay_history_entries(states: list[Any], currency: str) -> list[ReplayHistoryEntry]:
+def replay_settled_pots(state) -> list[tuple[str, Decimal]]:
+    """Only chips already collected from the betting round belong in central piles."""
+    if state.ended:
+        return []
+    pending = sum(player.chips for player in state.players.values() if player.action != "collected")
+    if pending:
+        return [("Pot", state.pot)] if state.pot > 0 else []
+    return [(label, amount) for label, amount in state.computePots() if amount > 0]
+
+
+def replay_history_entries(states: list[Any], currency: str, *, blind: Decimal | None = None) -> list[ReplayHistoryEntry]:
     """Presentation events retain the exact original seek index, including deals."""
     entries = []
     for index, state in enumerate(states):
@@ -433,8 +453,9 @@ def replay_history_entries(states: list[Any], currency: str) -> list[ReplayHisto
             for player in state.players.values():
                 if player.justacted and player.action:
                     entries.append(ReplayHistoryEntry(
-                        index, street, replay_action_text(player, currency, states[index - 1].players.get(player.name)),
+                        index, street, replay_action_text(player, currency, states[index - 1].players.get(player.name), blind=blind),
                         "action", player.action,
+                        replay_action_amount(player, states[index - 1].players.get(player.name)),
                     ))
         if getattr(state, "ended", False):
             entries.append(ReplayHistoryEntry(index, street, "Hand complete", "result"))
@@ -840,6 +861,14 @@ class GuiReplayer(QWidget):
         self.buttonBox2.addWidget(self.showCards)
 
         self.audio = ReplayerAudio(self, config=self.conf)
+        self.big_blind_amount: Decimal | None = None
+        self.chip_quantum = Decimal("0.01")
+        self._chip_regions: list[tuple[QRectF, str]] = []
+        self.bigBlindCheck = QCheckBox(_("Big blinds"))
+        self.bigBlindCheck.setChecked(bool(self.audio.settings.value("display/big_blinds", False, type=bool)))
+        self.bigBlindCheck.toggled.connect(self._big_blinds_changed)
+        self.bigBlindCheck.setToolTip(_("Show stacks, bets, pots and action amounts in big blinds"))
+        self.buttonBox2.addWidget(self.bigBlindCheck)
         self._sound_frame_index: int | None = None
         self.soundCheck = QCheckBox(_("Sound"))
         self.soundCheck.setToolTip(_("Original PokerStars chip and card sounds during playback"))
@@ -963,6 +992,53 @@ class GuiReplayer(QWidget):
                     index = Card.cardFromValueSuit(ranks[j], suits[i])
                     self.cardImages[index] = self.deck_inst.card(suits[i], ranks[j])
             self.cardImages[0] = self.deck_inst.back()
+
+    def _active_big_blind(self) -> Decimal | None:
+        toggle = getattr(self, "bigBlindCheck", None)
+        return getattr(self, "big_blind_amount", None) if toggle is not None and toggle.isChecked() else None
+
+    def _format_amount(self, value) -> str:
+        return format_replay_amount(value, self.currency_code, self._active_big_blind())
+
+    def _big_blinds_changed(self, enabled: bool) -> None:
+        self.audio.settings.setValue("display/big_blinds", enabled)
+        if getattr(self, "historyDialog", None):
+            self._populate_history()
+        self.update()
+
+    def _configure_replay_units(self, hand) -> None:
+        self.big_blind_amount = big_blind(hand) if supports_bb_amounts(hand) else None
+        self.bigBlindCheck.setEnabled(self.big_blind_amount is not None)
+        self.bigBlindCheck.setToolTip(
+            _("Show stacks, bets, pots and action amounts in big blinds")
+            if self.big_blind_amount is not None else _("This hand has no usable big blind")
+        )
+
+    def _configure_chip_quantum(self) -> None:
+        quantum = Decimal(1) if self.currency_code in {"", "T$", "play"} else Decimal("0.01")
+        for state in self.states:
+            for player in state.players.values():
+                for amount in (player.stack, player.chips):
+                    if amount and amount.is_finite():
+                        quantum = min(quantum, Decimal(1).scaleb(amount.normalize().as_tuple().exponent))
+        self.chip_quantum = quantum
+
+    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=()) -> None:
+        text = f"{caption}: {self._format_amount(amount)}" if caption else self._format_amount(amount)
+        bounds, stacks = draw_chip_amount(
+            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid,
+        )
+        breakdown = "; ".join(f"{stack.count} × {self._format_amount(stack.denomination)}" for stack in stacks)
+        tooltip = f"{text}\n{breakdown}" if breakdown else text
+        self._chip_regions.append((bounds, tooltip))
+
+    def event(self, event) -> bool:
+        if isinstance(event, QHelpEvent):
+            for bounds, tooltip in getattr(self, "_chip_regions", []):
+                if bounds.contains(event.pos()):
+                    QToolTip.showText(event.globalPos(), tooltip, self)
+                    return True
+        return super().event(event)
 
     def _available_deck_types(self) -> list[str]:
         cards_path = os.path.join(self.conf.graphics_path, "cards")
@@ -1094,8 +1170,7 @@ class GuiReplayer(QWidget):
         )
         return info + self._special_pot_suffix(hand)
 
-    @staticmethod
-    def _special_pot_suffix(hand) -> str:
+    def _special_pot_suffix(self, hand) -> str:
         """Header markers for bomb pots and splash pots (amounts stored in cents)."""
         currency = hand.gametype.get("currency", "")
         markers = []
@@ -1103,7 +1178,7 @@ class GuiReplayer(QWidget):
             markers.append("Bomb pot")
         splash = getattr(hand, "splashPot", 0)
         if splash:
-            markers.append(f"Splash pot: {Decimal(splash) / 100:.2f}{currency}")
+            markers.append(f"Splash pot: {format_replay_amount(Decimal(splash) / 100, currency, self._active_big_blind())}")
         return ("  ·  " + "  ·  ".join(markers)) if markers else ""
 
     _RUN_IT_STREETS = frozenset(f"{s}{n}" for s in ("FLOP", "TURN", "RIVER") for n in (1, 2, 3))
@@ -1966,7 +2041,7 @@ class GuiReplayer(QWidget):
         game_title = self.info.split(" hand n°", 1)[0]
         raw_stake = f"{hand.gametype['bb']}{hand.gametype['currency']}"
         game_title = game_title.removesuffix(raw_stake).strip()
-        game_title += f" · {format_replay_amount(Decimal(str(hand.gametype['bb'])), self.currency_code)}"
+        game_title += f" · {self._format_amount(Decimal(str(hand.gametype['bb'])))}"
         title = painter.fontMetrics().elidedText(game_title, Qt.TextElideMode.ElideRight, title_width)
         self.setToolTip(self.info)
         painter.drawText(QRectF(24, 10, title_width, 26), Qt.AlignmentFlag.AlignLeft, title)
@@ -2074,13 +2149,6 @@ class GuiReplayer(QWidget):
         if pot_total <= 0:
             # Pot already collected (hand conclusion): nothing to display.
             return
-        if len(pots) <= 1:
-            pot_text = f"Pot: {format_replay_amount(pot_total, self.currency_code)}"
-        else:
-            pot_text = "\n".join(
-                f"{label}: {format_replay_amount(amount, self.currency_code)}" for label, amount in pots
-            )
-
         pot_rect = layout.pot_rect
         if not board_cards:
             pot_rect = QRectF(
@@ -2089,23 +2157,26 @@ class GuiReplayer(QWidget):
                 176,
                 28,
             )
-        if len(pots) > 1:
-            extra = (len(pots) - 1) * 18
-            pot_rect = QRectF(
-                pot_rect.x(),
-                pot_rect.y() - extra / 2,
-                pot_rect.width(),
-                pot_rect.height() + extra,
+        state = self.states[self.stateSlider.value()]
+        settled = replay_settled_pots(state)
+        if not settled:
+            self._draw_chip_amount(painter, pot_total, pot_rect.center(), _("Total pot"), show_chips=False)
+        elif len(settled) == 1:
+            self._draw_chip_amount(painter, settled[0][1], pot_rect.center(), _("Pot"))
+        else:
+            row_height = 36
+            first_y = min(
+                layout.board_rect.bottom() + 10,
+                self.height() - CONTROL_RESERVED_HEIGHT - 30 - ((len(settled) - 1) // 2) * row_height,
             )
-        painter.setFont(replay_font("DejaVu Sans", 11, QFont.Weight.DemiBold))
-        text_width = max(painter.fontMetrics().horizontalAdvance(line) for line in pot_text.splitlines()) + 24
-        if text_width > pot_rect.width():
-            pot_rect = QRectF(pot_rect.center().x() - text_width / 2, pot_rect.y(), text_width, pot_rect.height())
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(8, 12, 15, 190))
-        painter.drawRoundedRect(pot_rect, 8, 8)
-        painter.setPen(QColor("#eef1f5"))
-        painter.drawText(pot_rect, Qt.AlignmentFlag.AlignCenter, pot_text)
+            for index, (label, amount) in enumerate(settled):
+                column = -1 if index % 2 == 0 else 1
+                anchor = QPointF(
+                    layout.table_rect.center().x() + column * layout.table_rect.width() * .30,
+                    first_y + (index // 2) * row_height,
+                )
+                caption = _("Main") if label == "Main pot" else label.replace("Side pot", _("Side"))
+                self._draw_chip_amount(painter, amount, anchor, caption, max_width=layout.table_rect.width() / 3)
 
     def _draw_player(
         self,
@@ -2166,7 +2237,7 @@ class GuiReplayer(QWidget):
 
         painter.setPen(text)
         painter.setFont(replay_font("DejaVu Sans", name_font_size, QFont.Weight.DemiBold))
-        stack_text = format_replay_amount(player.stack, self.currency_code)
+        stack_text = self._format_amount(player.stack)
         name_rect = QRectF(
             seat.panel_rect.x() + 6,
             seat.panel_rect.y() + 2,
@@ -2183,18 +2254,21 @@ class GuiReplayer(QWidget):
 
         action_text = player.action or ("Hero" if player.name == self.Heroes else "")
         if player.justacted and player.action == "collected" and player.chips:
-            action_text = f"collected {format_replay_amount(player.chips, self.currency_code)}"
+            action_text = f"collected {self._format_amount(player.chips)}"
         elif player.allin and player.action not in (None, "collected", "folds"):
             action_text = f"{action_text} all-in".strip()
         if is_final_frame and player.cashout is not None:
-            action_text = f"cashout {format_replay_amount(player.cashout, self.currency_code)}"
+            action_text = f"cashout {self._format_amount(player.cashout)}"
         if is_final_frame and player.splash:
             # Appended rather than substituted: the seat has to show both, or
             # the amount read off the box no longer matches what the player
             # actually took off the table.
-            splash_text = f"+{format_replay_amount(player.splash, self.currency_code)} splash"
+            splash_text = f"+{self._format_amount(player.splash)} splash"
             action_text = f"{action_text}  {splash_text}".strip()
-        painter.setPen(accent if actual_actor or player.is_winner else QColor("#a6afbc"))
+        painter.setPen(
+            QColor("#f5f7fa") if player.action == "collected"
+            else accent if actual_actor or player.is_winner else QColor("#a6afbc")
+        )
         painter.setFont(replay_font(
             "DejaVu Sans", action_font_size,
             QFont.Weight.Bold if actual_actor or player.is_winner else QFont.Weight.Normal,
@@ -2250,16 +2324,18 @@ class GuiReplayer(QWidget):
             painter.setFont(combo_font)
             painter.drawText(combo_rect, Qt.AlignmentFlag.AlignCenter, combo_text)
 
-        if player.chips and player.action != "collected":
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(8, 12, 15, 205))
-            painter.drawRoundedRect(seat.bet_rect, 8, 8)
-            painter.setPen(QColor("#ffe769"))
-            painter.setFont(replay_font("Helvetica", name_font_size, QFont.Weight.Bold))
-            painter.drawText(
-                seat.bet_rect,
-                Qt.AlignmentFlag.AlignCenter,
-                format_replay_amount(player.chips, self.currency_code),
+        if player.chips:
+            avoid = [region for other_seat in layout.seats.values() for region in (other_seat.cards_rect, other_seat.panel_rect)]
+            if self.states[self.stateSlider.value()].renderBoard:
+                avoid.append(layout.board_rect)
+            if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat:
+                size = max(24, int(DEALER_BUTTON_BASE_SIZE * card_scale))
+                avoid.append(QRectF(seat.dealer_pos.x() - size / 2, seat.dealer_pos.y() - size / 2, size, size))
+            self._draw_chip_amount(
+                painter, player.chips, seat.bet_rect.center(),
+                _("Won") if player.action == "collected" else "",
+                max_width=200,
+                avoid=tuple(avoid),
             )
 
         if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat and not self.dealer.isNull():
@@ -2280,7 +2356,8 @@ class GuiReplayer(QWidget):
     def _timeline_entries(self, max_entries: int = 10) -> list[str]:
         states_shown = self.states[: self.stateSlider.value() + 1]
         entries = [
-            entry.text for entry in replay_history_entries(states_shown, self.currency_code) if entry.kind == "action"
+            entry.text for entry in replay_history_entries(states_shown, self.currency_code, blind=self._active_big_blind())
+            if entry.kind == "action"
         ]
         entries.extend(GuiReplayer._showdown_entries(self, states_shown))
         return entries[-max_entries:]
@@ -2316,14 +2393,14 @@ class GuiReplayer(QWidget):
                 if combo:
                     entries.append(f"{name}: {combo}{suffix}")
             for name, amount in (getattr(hand, "cashOutAmounts", {}) or {}).items():
-                entries.append(f"{name}: cashout {format_replay_amount(amount, self.currency_code)}")
+                entries.append(f"{name}: cashout {self._format_amount(amount)}")
             # The splash is added by the room, not won from the other players,
             # so it is its own line rather than part of what was collected --
             # the collected figure balances against the bets and would stop
             # balancing if this were folded into it.
             for name, amount in (getattr(hand, "splashWinnings", {}) or {}).items():
                 if amount:
-                    entries.append(f"{name}: splash +{format_replay_amount(amount, self.currency_code)}")
+                    entries.append(f"{name}: splash +{self._format_amount(amount)}")
         return entries
 
     def _history_events(self) -> list[ReplayHistoryEntry]:
@@ -2332,7 +2409,7 @@ class GuiReplayer(QWidget):
                 ReplayHistoryEntry(index, "OFC", self._ofc_state_label(state), "phase")
                 for index, state in enumerate(self.states)
             ]
-        entries = replay_history_entries(self.states, self.currency_code)
+        entries = replay_history_entries(self.states, self.currency_code, blind=self._active_big_blind())
         entries.extend(
             ReplayHistoryEntry(len(self.states) - 1, "RESULT", text, "result")
             for text in self._showdown_entries(self.states)
@@ -2412,10 +2489,12 @@ class GuiReplayer(QWidget):
             return "Hand complete" if complete else f"{(frame.street or 'Hand').capitalize()} review"
         player = acted[-1]
         if player.action == "collected" and player.chips:
-            summary = f"{player.name} collected {format_replay_amount(player.chips, self.currency_code)}"
+            summary = f"{player.name} collected {self._format_amount(player.chips)}"
             return f"Hand complete · {summary}" if complete else summary
         previous = self.states[index - 1].players.get(player.name) if index > 0 else None
-        summary = replay_action_text(player, self.currency_code, previous).replace(f"{player.name}: ", f"{player.name} ", 1)
+        summary = replay_action_text(player, self.currency_code, previous, blind=self._active_big_blind()).replace(
+            f"{player.name}: ", f"{player.name} ", 1,
+        )
         return f"Hand complete · {summary}" if complete else summary
 
     def _next_actor_name(self, current_index: int) -> str | None:
@@ -2485,7 +2564,7 @@ class GuiReplayer(QWidget):
             return ""
         parts = []
         if metrics.get("facing_call"):
-            call_amt = format_replay_amount(metrics["call_amount"], self.currency_code)
+            call_amt = self._format_amount(metrics["call_amount"])
             odds_pct = format_number(metrics["pot_odds_pct"], 1)
             ratio = format_number(metrics["pot_odds_ratio"], 1)
             parts.append(f"Hero call {call_amt} · pot odds {odds_pct}% ({ratio}:1)")
@@ -2529,14 +2608,15 @@ class GuiReplayer(QWidget):
             painter.drawText(
                 QRectF(rect.x() + 12, rect.y() + 36, rect.width() - 24, 26),
                 Qt.AlignmentFlag.AlignLeft,
-                "← → Actions   ·   Space Next action   ·   ↑ ↓ Hands",
+                f"Total pot: {self._format_amount(sum(amount for _label, amount in frame.pots))} · ← / → / Space"
+                if not getattr(self.states[current_index], "ended", False) else "← / → review · ↑ / ↓ hands",
             )
             return
 
         # Line 2: Pot Odds & Call Equity
         line2_parts = []
         if metrics.get("facing_call"):
-            call_amt = format_replay_amount(metrics["call_amount"], self.currency_code)
+            call_amt = self._format_amount(metrics["call_amount"])
             odds_pct = format_number(metrics["pot_odds_pct"], 1)
             ratio = format_number(metrics["pot_odds_ratio"], 1)
             line2_parts.append(f"Pot Odds: {odds_pct}% ({ratio}:1) [Call {call_amt}]")
@@ -2587,7 +2667,7 @@ class GuiReplayer(QWidget):
         painter.setPen(QColor("#eef3f7"))
         painter.drawText(layout.timeline_rect.adjusted(14, 12, -14, -12), Qt.AlignmentFlag.AlignTop, "Action timeline")
 
-        row_height = 44
+        row_height = 56
         max_entries = max(4, int((layout.timeline_rect.height() - 54) // row_height))
         y = layout.timeline_rect.y() + 44
         current = self.stateSlider.value()
@@ -2607,11 +2687,29 @@ class GuiReplayer(QWidget):
             if selected:
                 label = f"› {label}"
             text_rect = entry_rect.adjusted(8, 0, -8, 0)
-            painter.drawText(
-                text_rect,
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                painter.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, int(text_rect.width())),
-            )
+            if entry.amount is not None:
+                amount_text = self._format_amount(entry.amount)
+                amount_width = painter.fontMetrics().horizontalAdvance(amount_text) + 10
+                name_action = label.rsplit(amount_text, 1)[0].rstrip()
+                name, _, action = name_action.rpartition(": ")
+                left_width = max(1, text_rect.width() - amount_width)
+                painter.setPen(QColor("#a6afbc"))
+                painter.drawText(
+                    QRectF(text_rect.x(), text_rect.y() + 2, left_width, 24), Qt.AlignmentFlag.AlignLeft,
+                    painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, int(left_width)),
+                )
+                painter.setPen(action_colors(entry.action)[2])
+                painter.drawText(QRectF(text_rect.x(), text_rect.y() + 27, left_width, 24), Qt.AlignmentFlag.AlignLeft, action)
+                painter.setPen(QColor("#f5f7fa"))
+                painter.drawText(
+                    QRectF(text_rect.right() - amount_width, text_rect.y(), amount_width, text_rect.height()),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, amount_text,
+                )
+            else:
+                painter.drawText(
+                    text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    painter.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, int(text_rect.width())),
+                )
             self._timeline_hit_regions.append((entry_rect, entry.state_index))
             y += row_height
 
@@ -2625,6 +2723,7 @@ class GuiReplayer(QWidget):
         super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: F811
+        self._chip_regions = []
         if not getattr(self, "states", None):
             return
         if not getattr(self, "replay_model", None):
@@ -2678,6 +2777,8 @@ class GuiReplayer(QWidget):
             ofc_hand = self._load_ofc_replay_entry(entry)
             self.currency = ""
             self.currency_code = "play"
+            self.big_blind_amount = None
+            self.bigBlindCheck.setEnabled(False)
             self.Heroes = ""
             self.replay_model = self._build_ofc_replay_model(ofc_hand)
         else:
@@ -2689,6 +2790,7 @@ class GuiReplayer(QWidget):
             self.shared_hand_id = int(entry) if str(entry).isdigit() else None
             self.currency = hand.sym
             self.currency_code = str(hand.gametype.get("currency", "USD"))
+            self._configure_replay_units(hand)
             self.Heroes = hand.hero or self._resolve_hero(hand.sitename)
             self.replay_model = self._build_replay_model(hand)
             # Legacy hands without a hero seat: share them from the same point
@@ -2697,6 +2799,8 @@ class GuiReplayer(QWidget):
                 self.shared_hero = self.Heroes
         self.info = self.replay_model.info
         self.states = self.replay_model.states
+        if not is_ofc:
+            self._configure_chip_quantum()
         self._timeline_hit_regions = []
         self.shareButton.setEnabled(self.shared_hand is not None)
         self.reviewButton.setEnabled(self.shared_hand is not None)

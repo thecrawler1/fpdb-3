@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 from time import monotonic, sleep
 from unittest.mock import patch
@@ -14,10 +16,38 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-def main(argv=None) -> int:
+def capture_side_pots(replayer, hand, app, output: Path) -> None:
+    from fpdb_3_legacy.GuiReplayer import TableState
+
+    # Hero's unmatched 20 is returned; the remaining central pots are 240 + 40.
+    state = TableState(hand)
+    state.startPhase("PREFLOP")
+    state.updateForAction(("Hero", "bets", Decimal(120)))
+    state.updateForAction(("Player3", "calls", Decimal(80)))
+    state.updateForAction(("Player1", "calls", Decimal(100)))
+    before_flop = copy.deepcopy(state)
+    state.startPhase("FLOP")
+    assert state.computePots() == [("Main pot", Decimal(240)), ("Side pot 1", Decimal(40))]
+    replayer.states = [before_flop, state]
+    replayer.replay_model.states = replayer.states
+    replayer.stateSlider.setMaximum(1)
+    replayer.stateSlider.setValue(1)
+    replayer.resize(1280, 720)
+    for _ in range(3):
+        app.processEvents()
+    replayer.grab().save(str(output / "side-pots-1280.png"))
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
-    args = parser.parse_args(argv)
+    parser.add_argument("--big-blinds", action="store_true", help="capture BB mode without changing saved preferences")
+    parser.add_argument("--side-pots", action="store_true", help="include a synthetic, conserved two-pot scenario")
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
     root = Path(__file__).resolve().parent.parent
     output = args.out.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -41,6 +71,9 @@ def main(argv=None) -> int:
             replayer = GuiReplayer(config, None, None, [1], db=object())
             replayer.play_hand(0)
         replayer.audio.stop()
+        replayer.bigBlindCheck.blockSignals(True)
+        replayer.bigBlindCheck.setChecked(args.big_blinds)
+        replayer.bigBlindCheck.blockSignals(False)
         manifest = []
         scenarios = (
             ("preflop-1280.png", 1280, 720, "PREFLOP"),
@@ -85,8 +118,11 @@ def main(argv=None) -> int:
                     "pixels": [pixmap.width(), pixmap.height()],
                     "state": index,
                     "street": street,
+                    "units": "BB" if args.big_blinds else "original",
                 }
             )
+        if args.side_pots:
+            capture_side_pots(replayer, hand, app, output)
         replayer.close()
         app.processEvents()
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

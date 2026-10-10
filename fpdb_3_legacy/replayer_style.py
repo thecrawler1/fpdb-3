@@ -30,6 +30,7 @@ QPushButton[primary="true"]:disabled { background: #181e25; border-color: #252a3
 QPushButton[streetActive="true"] { background: #30313b; color: #eef1f5; border-color: #96616a; }
 QCheckBox { spacing: 7px; color: #a6afbc; }
 QCheckBox::indicator { width: 21px; height: 21px; border: 1px solid #596372; border-radius: 3px; background: #22262e; }
+QCheckBox::indicator:unchecked, QCheckBox::indicator:unchecked:enabled { border-color: #596372; background: #22262e; image: none; }
 QCheckBox::indicator:checked, QCheckBox::indicator:checked:enabled { background: #78d9a0; border-color: #78d9a0; image: none; }
 QComboBox { background: #22262e; border: 1px solid #303640; border-radius: 5px; padding: 0px 8px; min-height: 40px; max-height: 40px; }
 QComboBox QAbstractItemView { background: #22262e; color: #eef1f5; selection-background-color: #435e50; }

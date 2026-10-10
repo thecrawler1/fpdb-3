@@ -45,6 +45,19 @@ def test_replay_amount_distinguishes_money_and_chips() -> None:
         set_format_locale(previous)
 
 
+def test_replay_amount_converts_currency_and_tournament_chips_to_bb():
+    previous = get_format_locale()
+    try:
+        set_format_locale("en_US")
+        assert format_replay_amount(Decimal("2"), "USD", Decimal(".02")) == "100 BB"
+        assert format_replay_amount(Decimal("5.53"), "USD", Decimal(".02")) == "276.50 BB"
+        assert format_replay_amount(1000, "T$", Decimal(100)) == "10 BB"
+        assert format_replay_amount(0, "USD", Decimal(".02")) == "0 BB"
+        assert format_replay_amount(1, "USD", Decimal(0)) == "$1.00"
+    finally:
+        set_format_locale(previous)
+
+
 def test_replay_equity_uses_visible_board_and_known_live_pockets():
     frame = SimpleNamespace(
         players=[

@@ -16,7 +16,11 @@ def transport_icon(kind: str) -> QIcon:
     if backwards:
         painter.translate(64, 0)
         painter.scale(-1, 1)
-    if kind in {"previous-hand", "next-hand"}:
+    if kind in {"previous", "next"}:
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(15, 32, 47, 32)
+        painter.drawPolyline(QPolygonF([QPointF(33, 18), QPointF(47, 32), QPointF(33, 46)]))
+    elif kind in {"previous-hand", "next-hand"}:
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for x in (15, 32):
             painter.drawPolyline(QPolygonF([QPointF(x, 16), QPointF(x + 17, 32), QPointF(x, 48)]))

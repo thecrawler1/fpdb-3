@@ -1,11 +1,12 @@
 """Keep personal sound controls compatible with upstream share/solver features."""
 
 import sys
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QPoint, QRectF, QSettings, Qt
 from PySide6.QtGui import QContextMenuEvent, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QMenu, QTableView, QWidget
 
@@ -14,8 +15,11 @@ from fpdb_3_legacy.GuiHandViewer import GuiHandViewer
 from fpdb_3_legacy.GuiReplayer import (
     CONTROL_RESERVED_HEIGHT,
     GuiReplayer,
+    TableState,
     build_replay_layout,
+    order_players_clockwise,
     replay_is_phase,
+    replay_settled_pots,
 )
 from fpdb_3_legacy.GuiTourHandViewer import TourHandViewer
 from fpdb_3_legacy.PokerStarsToFpdb import PokerStars
@@ -89,7 +93,7 @@ def test_replayer_controls_reserve_real_space(qtbot, legacy_config, monkeypatch,
         replayer.stateSlider, *replayer.streetButtons.values(), replayer.startButton,
         replayer.prevButton, replayer.nextButton, replayer.endButton,
         replayer.previousHandButton, replayer.nextHandButton,
-        replayer.showCards, replayer.soundCheck, replayer.deckTypeCombo,
+        replayer.showCards, replayer.soundCheck, replayer.bigBlindCheck, replayer.deckTypeCombo,
     ]
     rects = []
     for widget in controls:
@@ -117,7 +121,9 @@ def test_replayer_controls_reserve_real_space(qtbot, legacy_config, monkeypatch,
 
 
 @pytest.fixture
-def history_replayer(qtbot, legacy_config, monkeypatch):
+def history_replayer(qtbot, legacy_config, monkeypatch, tmp_path):
+    settings = QSettings(str(tmp_path / "replayer.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(replayer_audio, "QSettings", lambda *args: settings)
     monkeypatch.setattr(replayer_audio, "prepare_sounds", lambda config: {})
     fixture = Path(__file__).parent.parent / "fixtures/hands/pokerstars/review/nl_3bet_6max.txt"
     hand = PokerStars(config=legacy_config, in_path=str(fixture), autostart=True).getProcessedHands()[0]
@@ -172,6 +178,7 @@ def test_actor_emphasis_and_metrics_exclude_phase_copies(history_replayer, monke
     replayer = history_replayer
     replayer._ensure_replayer_assets()
     monkeypatch.setattr(replayer, "_draw_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(replayer, "_draw_chip_amount", lambda *args, **kwargs: None)
     painter = MagicMock()
     painter.fontMetrics.return_value.horizontalAdvance.return_value = 40
     painter.fontMetrics.return_value.elidedText.side_effect = lambda text, *args: text
@@ -224,7 +231,7 @@ def test_wide_timeline_seeks_to_original_state(qtbot, history_replayer):
     replayer.end_clicked(False)
     qtbot.wait(1)
     replayer.grab()
-    rect, index = next((rect, index) for rect, index in replayer._timeline_hit_regions if index == 6)
+    rect, index = next((rect, index) for rect, index in replayer._timeline_hit_regions if index == 11)
     qtbot.mouseClick(replayer, Qt.MouseButton.LeftButton, pos=rect.center().toPoint())
     assert replayer.stateSlider.value() == index
 
@@ -254,6 +261,69 @@ def test_larger_type_preserves_original_card_dimensions(history_replayer):
     assert font.pointSizeF() == 15
     layout = build_replay_layout(1280, 720, [f"p{i}" for i in range(6)], "p0", "holdem")
     assert (layout.card_width, layout.card_height) == (56, 72)
+
+
+def test_big_blind_toggle_converts_history_and_stacks_without_changing_state(qtbot, history_replayer):
+    replayer = history_replayer
+    before = [(state.pot, state.newpot, [(p.stack, p.chips) for p in state.players.values()]) for state in replayer.states]
+    replayer.big_blind_amount = Decimal("0.02")
+    replayer.actions_clicked()
+    replayer.bigBlindCheck.setChecked(True)
+    assert replayer._format_amount(Decimal(2)) == "100 BB"
+    assert next(e.text for e in replayer._history_events() if e.action == "calls") == "Hero: calls 276.50 BB"
+    assert replayer.historyList.item(1).text().endswith("25 BB")
+    after = [(state.pot, state.newpot, [(p.stack, p.chips) for p in state.players.values()]) for state in replayer.states]
+    assert before == after
+    replayer.bigBlindCheck.setChecked(False)
+    assert replayer._format_amount(Decimal(2)) == "$2.00"
+    replayer.historyDialog.close()
+
+
+def test_central_piles_do_not_double_count_outstanding_bets(history_replayer):
+    replayer = history_replayer
+    preflop = replayer.states[6]
+    assert preflop.newpot == Decimal("3.97")
+    assert replay_settled_pots(preflop) == []
+    flop = next(state for state in replayer.states if state.street == "FLOP")
+    assert replay_settled_pots(flop) == [("Pot", Decimal("17.50"))]
+    assert replay_settled_pots(replayer.states[-1]) == []
+
+
+def test_settled_side_piles_keep_all_in_caps_and_return_uncalled_chips(history_replayer):
+    state = TableState(history_replayer.replay_model.hand)
+    state.startPhase("PREFLOP")
+    state.updateForAction(("Hero", "bets", Decimal(120)))
+    state.updateForAction(("Player3", "calls", Decimal(80)))
+    state.updateForAction(("Player1", "calls", Decimal(100)))
+    assert replay_settled_pots(state) == []
+    state.startPhase("FLOP")
+    assert replay_settled_pots(state) == [("Main pot", Decimal(240)), ("Side pot 1", Decimal(40))]
+    assert state.players["Hero"].stack == 20
+
+
+def test_stud_replay_has_no_fake_big_blind_conversion(history_replayer):
+    hand = history_replayer.replay_model.hand
+    hand.gametype["base"] = "stud"
+    history_replayer._configure_replay_units(hand)
+    assert not history_replayer.bigBlindCheck.isEnabled()
+    assert history_replayer.big_blind_amount is None
+
+
+def test_winning_chip_stack_clears_dealer_and_card_slots(qtbot, history_replayer):
+    replayer = history_replayer
+    replayer.resize(1280, 720)
+    replayer.end_clicked(False)
+    qtbot.wait(1)
+    replayer.grab()
+    bounds = next(bounds for bounds, text in replayer._chip_regions if text.startswith("Won:"))
+    players = order_players_clockwise(replayer._frame_from_state(replayer.states[-1]).players, replayer.Heroes)
+    layout = build_replay_layout(1280, 720, [player.name for player in players], replayer.Heroes, "holdem")
+    winner = next(player for player in players if player.action == "collected")
+    seat = layout.seats[winner.name]
+    diameter = max(24, int(32 * layout.card_width / 70))
+    dealer = QRectF(seat.dealer_pos.x() - diameter / 2, seat.dealer_pos.y() - diameter / 2, diameter, diameter)
+    assert not bounds.intersects(dealer)
+    assert all(not bounds.intersects(other.cards_rect) for other in layout.seats.values())
 
 
 @pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])

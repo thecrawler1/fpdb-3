@@ -46,8 +46,11 @@ def stud_replayer():
         cardwidth=70,
         cardheight=100,
         deckType="simple",
+        big_blind_amount=None,
+        bigBlindCheck=SimpleNamespace(isChecked=lambda: False),
+        _draw_chip_amount=Mock(),
     )
-    for method in ("_normalized_cards", "_frame_from_state", "_visible_cards", "_draw_cards", "_paint_card"):
+    for method in ("_normalized_cards", "_frame_from_state", "_visible_cards", "_draw_cards", "_paint_card", "_format_amount", "_active_big_blind"):
         setattr(replayer, method, MethodType(getattr(GuiReplayer, method), replayer))
     return replayer
 
