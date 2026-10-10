@@ -38,12 +38,39 @@ def capture_side_pots(replayer, hand, app, output: Path) -> None:
     replayer.grab().save(str(output / "side-pots-1280.png"))
 
 
+def capture_polish_cases(replayer, app, output: Path) -> None:
+    replayer.resize(1260, 1380)
+    replayer.stateSlider.setValue(0)
+    replayer._clear_card_animations()
+    app.processEvents()
+    replayer.grab().save(str(output / "portrait-1260.png"))
+    replayer.resize(1280, 720)
+    fold = next(entry for entry in replayer._history_events() if entry.action == "folds")
+    replayer.stateSlider.setValue(fold.state_index - 1)
+    replayer.next_clicked(False)
+    replayer._fold_timer.stop()
+    folded = next(player.name for player in replayer.states[fold.state_index].players.values() if player.justacted)
+    for name, progress in (("fold-start", 0), ("fold-mid", .5), ("fold-end", 1)):
+        replayer._fold_anim = {folded: monotonic() - progress * replayer._FOLD_DURATION}
+        replayer.update()
+        app.processEvents()
+        replayer.grab().save(str(output / f"{name}.png"))
+    replayer._clear_card_animations()
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--big-blinds", action="store_true", help="capture BB mode without changing saved preferences")
     parser.add_argument("--side-pots", action="store_true", help="include a synthetic, conserved two-pot scenario")
+    parser.add_argument("--polish-cases", action="store_true", help="include portrait and controlled fold frames")
     return parser.parse_args(argv)
+
+
+def configure_capture_units(replayer, enabled: bool) -> None:
+    replayer.bigBlindCheck.blockSignals(True)
+    replayer.bigBlindCheck.setChecked(enabled)
+    replayer.bigBlindCheck.blockSignals(False)
 
 
 def main(argv=None) -> int:
@@ -71,9 +98,7 @@ def main(argv=None) -> int:
             replayer = GuiReplayer(config, None, None, [1], db=object())
             replayer.play_hand(0)
         replayer.audio.stop()
-        replayer.bigBlindCheck.blockSignals(True)
-        replayer.bigBlindCheck.setChecked(args.big_blinds)
-        replayer.bigBlindCheck.blockSignals(False)
+        configure_capture_units(replayer, args.big_blinds)
         manifest = []
         scenarios = (
             ("preflop-1280.png", 1280, 720, "PREFLOP"),
@@ -121,6 +146,8 @@ def main(argv=None) -> int:
                     "units": "BB" if args.big_blinds else "original",
                 }
             )
+        if args.polish_cases:
+            capture_polish_cases(replayer, app, output)
         if args.side_pots:
             capture_side_pots(replayer, hand, app, output)
         replayer.close()

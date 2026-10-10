@@ -358,6 +358,45 @@ def test_stud_replay_has_no_fake_big_blind_conversion(history_replayer):
     assert history_replayer.big_blind_amount is None
 
 
+def test_fold_withdraws_once_and_leaves_no_static_ghost(qtbot, history_replayer, monkeypatch):
+    replayer = history_replayer
+    fold = next(entry for entry in replayer._history_events() if entry.action == "folds")
+    replayer.stateSlider.setValue(fold.state_index - 1)
+    replayer.next_clicked(False)
+    assert replayer._fold_anim
+    assert replayer._fold_timer.isActive()
+    qtbot.wait(260)
+    assert not replayer._fold_anim
+    assert not replayer._fold_timer.isActive()
+    painter = MagicMock()
+    draw = MagicMock()
+    monkeypatch.setattr(replayer, "_draw_cards", draw)
+    layout = build_replay_layout(1280, 720, list(replayer.states[fold.state_index].players), replayer.Heroes, "holdem")
+    replayer._draw_folded_cards(painter, ["0", "0"], next(iter(layout.seats.values())), layout, 1)
+    draw.assert_not_called()
+    painter.save.assert_not_called()
+
+
+def test_fold_history_seek_and_new_hand_do_not_replay_animation(history_replayer):
+    replayer = history_replayer
+    fold = next(entry for entry in replayer._history_events() if entry.action == "folds")
+    replayer.stateSlider.setValue(fold.state_index - 1)
+    replayer.actions_clicked()
+    item = next(
+        replayer.historyList.item(row) for row in range(replayer.historyList.count())
+        if replayer.historyList.item(row).data(Qt.ItemDataRole.UserRole) == fold.state_index
+    )
+    replayer._history_seek(item)
+    assert not replayer._fold_anim
+    replayer.stateSlider.setValue(fold.state_index - 1)
+    replayer.next_clicked(False)
+    assert replayer._fold_anim
+    replayer.play_hand(0)
+    assert not replayer._fold_anim
+    assert not replayer._fold_timer.isActive()
+    replayer.historyDialog.close()
+
+
 def test_winning_chip_stack_clears_dealer_and_card_slots(qtbot, history_replayer):
     replayer = history_replayer
     replayer.resize(1280, 720)

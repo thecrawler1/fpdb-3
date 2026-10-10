@@ -632,10 +632,12 @@ def build_replay_layout(
 
     table_width = min(table_area_width * 0.72, table_area_height * 1.62)
     table_width = max(420, table_width)
-    table_height = table_width * 0.55
+    portrait = max(0.0, min(1.0, (height / max(1, width) - .75) / .35))
+    table_ratio = .55 + .07 * portrait
+    table_height = table_width * table_ratio
     if table_height > table_area_height:
         table_height = table_area_height
-        table_width = table_height / 0.55
+        table_width = table_height / table_ratio
 
     table_x = TABLE_MARGIN + (table_area_width - table_width) / 2
     table_y = HEADER_HEIGHT + (table_area_height - table_height) / 2
@@ -860,12 +862,14 @@ class GuiReplayer(QWidget):
 
         self.showCards = QCheckBox(_("Hide Cards"))
         self.showCards.setChecked(True)
+        self.showCards.toggled.connect(lambda _checked: self.update())
         self.buttonBox2.addWidget(self.showCards)
 
         self.audio = ReplayerAudio(self, config=self.conf)
         self.big_blind_amount: Decimal | None = None
         self.chip_quantum = Decimal("0.01")
         self._chip_regions: list[tuple[QRectF, str]] = []
+        self._board_regions: list[QRectF] = []
         self.bigBlindCheck = QCheckBox(_("Big blinds"))
         self.bigBlindCheck.setChecked(bool(self.audio.settings.value("display/big_blinds", False, type=bool)))
         self.bigBlindCheck.toggled.connect(self._big_blinds_changed)
@@ -1856,6 +1860,8 @@ class GuiReplayer(QWidget):
 
     def _paint_card(self, painter: QPainter, card: str, rect: QRectF) -> None:
         """Give the colour deck legible ranks and suits; keep other deck assets."""
+        if getattr(self, "_record_board_cards", False):
+            self._board_regions.append(QRectF(rect))
         if self.deckType != "colour":
             assert self.cardImages is not None
             painter.drawPixmap(rect.toRect(), self.cardImages[Card.encodeCard(card)])
@@ -1999,24 +2005,20 @@ class GuiReplayer(QWidget):
             x += spacing
 
     def _draw_folded_cards(self, painter, cards, seat, layout, progress) -> None:
-        """Draw a folded player's cards as mucked: slide toward the table
-        centre, rotate slightly and fade. progress 0..1 drives the animation
-        (1.0 = at rest, fully mucked)."""
-        if not cards:
+        """A short inward withdrawal; completed folds leave no ghost cards."""
+        if not cards or progress >= 1.0:
             return
-        # Smoothstep easing for a natural toss.
-        e = progress * progress * (3 - 2 * progress)
+        e = 1 - (1 - max(0.0, progress)) ** 3
         center = layout.table_rect.center()
         cx = seat.cards_rect.center().x()
         cy = seat.cards_rect.center().y()
-        offset_x = (center.x() - cx) * 0.20 * e
-        offset_y = (center.y() - cy) * 0.20 * e
+        distance = max(1, hypot(center.x() - cx, center.y() - cy))
+        travel = min(24, layout.card_height * .25)
+        offset_x = (center.x() - cx) / distance * travel * e
+        offset_y = (center.y() - cy) / distance * travel * e
         painter.save()
-        painter.setOpacity(max(0.12, 1.0 - 0.85 * e))
+        painter.setOpacity(max(0.0, (1 - progress) ** 1.5))
         painter.translate(offset_x, offset_y)
-        painter.translate(cx, cy)
-        painter.rotate(14 * e)
-        painter.translate(-cx, -cy)
         self._draw_cards(painter, cards, seat.cards_rect, overlap=True)
         painter.restore()
 
@@ -2237,8 +2239,12 @@ class GuiReplayer(QWidget):
         cards = self._visible_cards(player, street, is_final_frame)
         panel_above_cards = seat.panel_rect.center().y() < seat.cards_rect.center().y()
         if player.action == "folds":
-            # Folded: muck the cards (slide toward the centre, rotate and fade).
-            self._draw_folded_cards(painter, cards, seat, layout, self._fold_progress(player.name))
+            # Explicit reveal is useful for studying known folded hands, but
+            # withdrawn opponents' unknown backs must not linger on the felt.
+            if not self.showCards.isChecked() and any(_is_real_card(card) for card in cards):
+                self._draw_cards(painter, cards, seat.cards_rect, overlap=True)
+            else:
+                self._draw_folded_cards(painter, cards, seat, layout, self._fold_progress(player.name))
         elif is_final_frame and player.hole_run_colors:
             # Run-it: each hole card gets one outline per run it wins (nested).
             self._draw_cards_multi_outline(
@@ -2394,7 +2400,7 @@ class GuiReplayer(QWidget):
             if any(phase.startswith(("FLOP", "TURN", "RIVER")) for phase in visible_board) or (
                 layout.seats and self.replay_model.hand.gametype.get("category", "").lower().startswith("cour")
             ):
-                avoid.append(layout.board_rect)
+                avoid.extend(getattr(self, "_board_regions", None) or [layout.board_rect])
             if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat:
                 size = max(24, int(DEALER_BUTTON_BASE_SIZE * card_scale))
                 avoid.append(QRectF(seat.dealer_pos.x() - size / 2, seat.dealer_pos.y() - size / 2, size, size))
@@ -2545,6 +2551,7 @@ class GuiReplayer(QWidget):
 
     def _history_seek(self, item: QListWidgetItem) -> None:
         self.stateSlider.setValue(item.data(Qt.ItemDataRole.UserRole))
+        self._clear_card_animations()
 
     def _current_action_summary(self, frame: ReplayFrame) -> str:
         index = self.stateSlider.value()
@@ -2785,12 +2792,14 @@ class GuiReplayer(QWidget):
             for rect, index in getattr(self, "_timeline_hit_regions", []):
                 if rect.contains(event.position()):
                     self.stateSlider.setValue(index)
+                    self._clear_card_animations()
                     event.accept()
                     return
         super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: F811
         self._chip_regions = []
+        self._board_regions = []
         if not getattr(self, "states", None):
             return
         if not getattr(self, "replay_model", None):
@@ -2816,7 +2825,11 @@ class GuiReplayer(QWidget):
         self._draw_table(painter, layout)
         self._draw_header(painter)
         self._draw_summary(painter, frame, layout, self.stateSlider.value())
-        self._draw_board(painter, frame, layout)
+        self._record_board_cards = True
+        try:
+            self._draw_board(painter, frame, layout)
+        finally:
+            self._record_board_cards = False
         for player in frame.players:
             seat = layout.seats.get(player.name)
             if seat is not None:
@@ -2866,6 +2879,7 @@ class GuiReplayer(QWidget):
                 self.shared_hero = self.Heroes
         self.info = self.replay_model.info
         self.states = self.replay_model.states
+        self._clear_card_animations()
         if not is_ofc:
             self._configure_chip_quantum()
         self._timeline_hit_regions = []
@@ -2946,7 +2960,14 @@ class GuiReplayer(QWidget):
                 config=self.conf,
             ).exec()
 
-    _FOLD_DURATION = 0.45  # seconds
+    _FOLD_DURATION = 0.20
+    _DISCARD_DURATION = 0.45
+
+    def _clear_card_animations(self) -> None:
+        self._fold_timer.stop()
+        self._fold_anim.clear()
+        self._discard_anim.clear()
+        self._fold_anim_value = None
 
     def slider_changed(self, value) -> None:  # noqa: F811
         if getattr(self, "states", None):
@@ -2957,20 +2978,22 @@ class GuiReplayer(QWidget):
             elif previous != value:
                 self.audio.stop()
             self._sync_replayer_controls()
-            self._maybe_start_fold_animation(value)
+            self._maybe_start_fold_animation(value, previous)
         self._sync_history_selection()
         self.update()
 
-    def _maybe_start_fold_animation(self, value) -> None:
+    def _maybe_start_fold_animation(self, value, previous=None) -> None:
         """Trigger fold (muck) and draw (discard) animations for this frame."""
         if getattr(self, "replay_mode", "hand") == "ofc":
             return
-        if value == self._fold_anim_value:
-            return
-        self._fold_anim_value = value
         states = getattr(self, "states", None)
         if not states or value < 0 or value >= len(states):
             return
+        # Seeking and reversing are snapshots, not new occurrences of a fold.
+        if previous != value - 1 or replay_is_phase(states, value) or self.stateSlider.isSliderDown():
+            self._clear_card_animations()
+            return
+        self._fold_anim_value = value
         state = states[value]
         now = time.monotonic()
         started = False
@@ -2990,7 +3013,7 @@ class GuiReplayer(QWidget):
     def _fold_tick(self) -> None:
         now = time.monotonic()
         self._fold_anim = {n: t for n, t in self._fold_anim.items() if now - t < self._FOLD_DURATION}
-        self._discard_anim = {n: t for n, t in self._discard_anim.items() if now - t < self._FOLD_DURATION}
+        self._discard_anim = {n: t for n, t in self._discard_anim.items() if now - t < self._DISCARD_DURATION}
         self.update()
         if not self._fold_anim and not self._discard_anim:
             self._fold_timer.stop()
@@ -3005,7 +3028,7 @@ class GuiReplayer(QWidget):
         t0 = self._discard_anim.get(name)
         if t0 is None:
             return None
-        return max(0.0, min(1.0, (time.monotonic() - t0) / self._FOLD_DURATION))
+        return max(0.0, min(1.0, (time.monotonic() - t0) / self._DISCARD_DURATION))
 
     def keyPressEvent(self, event) -> None:  # noqa: F811
         if event.key() == Qt.Key.Key_Left:
