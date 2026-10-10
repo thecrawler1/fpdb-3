@@ -50,6 +50,32 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -m qt
 
 A CI do fork também executa nos pushes e pull requests para `personal`.
 
+### Validação da integração
+
+A integração foi validada no Linux com Python 3.13.16 e as dependências exatas
+do `uv.lock` (incluindo PySide6 6.11.1):
+
+- Suíte principal: **11.050 testes aprovados**, 37 ignorados e 200 subtestes aprovados.
+- Suíte Qt/offscreen: **1.022 testes aprovados**, mais um teste marcado como
+  falha esperada que também passou nesta execução.
+- Ruff aprovado em `fpdb_3_legacy`, `fpdb`, `test`, `tests` e `tools`.
+- Mypy aprovado nos arquivos adaptados de áudio, instalação e preferências do HUD.
+- Migração e reconstrução dos cinco subsistemas numa cópia consistente de uma
+  base PokerStars NLHE; todos os 68 painéis do pacote de estudos cash executados.
+- Abertura do Study Explorer, Research Browser e dashboard, replay de mãos reais,
+  carregamento dos sete efeitos de áudio e geração dos dados de compartilhamento
+  e revisão preflop.
+- Importação incremental validada, com reconhecimento de duplicatas e preservação
+  dos IDs das mãos anteriores.
+
+Os testes revelaram uma diferença de métricas de fontes nas preferências do HUD.
+O fork corrige o dimensionamento dos botões para permitir uma janela estreita,
+mantendo as ações no menu responsivo. Há também um teste de integração específico
+para preservar os sons junto dos novos botões de compartilhamento e solver.
+
+O PreflopAdvisor é um aplicativo externo: a integração e os dados de revisão são
+testados aqui; abrir uma análise de solver requer esse aplicativo instalado.
+
 ### Atualizar um banco existente
 
 Feche a aplicação e mantenha um backup consistente do banco SQLite e da

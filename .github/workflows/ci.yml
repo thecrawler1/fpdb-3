@@ -63,6 +63,8 @@ jobs:
           tools/coverage_ratchet.py
           fpdb_3_legacy/__init__.py
           fpdb_3_legacy/equity.py
+          fpdb_3_legacy/replayer_audio.py
+          tools/install_personal_launchers.py
           fpdb_3_legacy/fpdb_api.py
           fpdb_3_legacy/HandDataReporter.py
           fpdb_3_legacy/ImprovedErrorHandler.py
