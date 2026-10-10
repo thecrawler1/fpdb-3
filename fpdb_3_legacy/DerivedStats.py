@@ -26,9 +26,17 @@ from typing import Any
 
 from fpdb_3_legacy import Card
 from fpdb_3_legacy.action_enum_stats import derive_counters as derive_action_enum_counters
+from fpdb_3_legacy.action_events import (
+    action_chips,
+    attach_action_events,
+    effective_stack_cents,
+)
 from fpdb_3_legacy.autonotes_aof import is_aof_category
+from fpdb_3_legacy.board_features import derive_board_rows, flop_texture_mask
 from fpdb_3_legacy.equity import EquityUnavailableError, calculate_equity, expected_pot_share, load_poker_eval
+from fpdb_3_legacy.hand_state_store import enumerate_hand_states
 from fpdb_3_legacy.loggingFpdb import get_logger
+from fpdb_3_legacy.player_situations import enumerate_situations
 
 pokereval = load_poker_eval()
 
@@ -449,6 +457,8 @@ class DerivedStats:
         self.hands: dict[str, Any] = {}
         self.handsplayers: dict[str, dict[str, Any]] = {}
         self.handsactions: dict[Any, Any] = {}
+        self.situations: list[Any] = []
+        self.hand_states: list[Any] = []
         self.handsstove: list[Any] = []
         self.handspots: list[Any] = []
 
@@ -469,6 +479,14 @@ class DerivedStats:
         self.assembleHands(hand)
         self.assembleHandsPlayers(hand)
         self.assembleHandsActions(hand)
+        # Third pass, over what the two above produced: one named situation per
+        # decision (issue #294). Purely additive -- no calculator reads it yet.
+        self.situations = list(enumerate_situations(hand, self.handsplayers, self.handsactions))
+        # Fourth pass, over the situations: what each postflop decision was
+        # holding (issue #302). It reads the two encoded cards the player rows
+        # already carry, so a player whose cards were never shown simply has no
+        # state -- there is nothing to guess from.
+        self.hand_states = list(enumerate_hand_states(self.situations, self.handsplayers))
 
         if pokereval and hand.gametype["category"] in Card.games and getattr(hand, "playerIds", None):
             self.assembleHandsStove(hand)
@@ -485,6 +503,14 @@ class DerivedStats:
     def getHandsActions(self) -> dict:
         """Get hands actions statistics."""
         return self.handsactions
+
+    def getSituations(self) -> list:
+        """Get the named decision situations of the hand (issue #294)."""
+        return self.situations
+
+    def getHandStates(self) -> list:
+        """Get the classified postflop decisions of the hand (issue #302)."""
+        return self.hand_states
 
     def getHandsStove(self) -> list:
         """Get hands stove statistics."""
@@ -583,7 +609,9 @@ class DerivedStats:
         log.debug("Set seats: %s", self.hands["seats"])
 
         self.hands["maxPosition"] = -1
-        self.hands["texture"] = None  # No calculation done yet
+        # Redefined by _assembleBoardFeatures (#295) as the flop texture mask;
+        # 0 means no flop, since every flop sets at least a suit structure flag.
+        self.hands["texture"] = 0
         self.hands["tourneyId"] = hand.tourneyId
         log.debug("Set tourneyId: %s", hand.tourneyId)
 
@@ -655,6 +683,24 @@ class DerivedStats:
             self.hands["boardcard3"] = 0
             self.hands["boardcard4"] = 0
             self.hands["boardcard5"] = 0
+
+    def _assembleBoardFeatures(self, hand: Any) -> None:
+        """Classify every board street once, for persistence and for filtering.
+
+        The features are derived at import time and stored, so a query never has
+        to re-parse a hand history or recompute a texture (#295).
+        ``Hands.texture`` is redefined here as the flop's texture mask -- the
+        column was written NULL on every hand since the schema was created, and
+        nothing reads it, so giving it that meaning costs no compatibility and
+        saves a join for the commonest filter of all: the flop texture.
+        """
+        try:
+            rows = derive_board_rows(hand)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            log.exception("Error deriving board features for hand %s", hand.handid)
+            rows = []
+        self.hands["boardfeatures"] = rows
+        self.hands["texture"] = flop_texture_mask(rows)
 
     def _assembleRunItTwiceBoards(self, hand: Any) -> None:
         """Encode one board per run when the hand was run several times."""
@@ -812,6 +858,7 @@ class DerivedStats:
             self._assembleHandIdentity(hand)
             self._assembleBoardCards(hand)
             self._assembleRunItTwiceBoards(hand)
+            self._assembleBoardFeatures(hand)
             self._assembleStreetTotals(hand)
             self._assembleStreetSummaries(hand)
             # Log hand details at debug level
@@ -1067,6 +1114,11 @@ class DerivedStats:
                     # Insert values from hand.actions
                     player_name = act[0]
                     action_type = act[1]
+                    # Preserve a missing/unparseable discard count separately
+                    # from an explicit zero (stand pat). -1 is outside the
+                    # valid count domain and fits the existing SMALLINT column.
+                    if action_type == "discards":
+                        self.handsactions[k]["numDiscarded"] = -1
                     self.handsactions[k]["player"] = player_name
                     self.handsactions[k]["street"] = i - 1
                     self.handsactions[k]["actionNo"] = k
@@ -1180,6 +1232,11 @@ class DerivedStats:
                             )
 
                     # Additional validation or logging can be added here as needed
+
+            # Second pass over the same stream: the rows above are what the
+            # replayer and the old aggregates read, the events are the context
+            # the analytics layers compose (issue #293).
+            attach_action_events(self.handsactions, hand, self.handsplayers)
 
             log.debug("Completed assembleHandsActions for hand ID: %s", hand.handid)
 
@@ -1845,19 +1902,6 @@ class DerivedStats:
         if not getattr(self, "handsplayers", None):
             return
 
-        def chips(a):
-            act = a[1]
-            if act == "raises":
-                try:
-                    return a[2] + a[4]  # Rb + C
-                except (IndexError, TypeError):
-                    return Decimal(0)
-            if act in ("folds", "checks", "stands pat", "discards", "cashout"):
-                return Decimal(0)
-            if len(a) > 2 and isinstance(a[2], (int, float, Decimal)):
-                return a[2]
-            return Decimal(0)
-
         streets_map = {
             "PREFLOP": ("cnt_p_raise_made", "val_p_raise_made_bp", "cnt_p_raise_made_2", "val_p_raise_made_2_bp"),
             "FLOP": ("cnt_f_raise_made", "val_f_raise_made_bp", "cnt_f_raise_made_2", "val_f_raise_made_2_bp"),
@@ -1883,7 +1927,7 @@ class DerivedStats:
                         except (TypeError, ValueError, ZeroDivisionError, IndexError):
                             pass
                     made_count[pname] = n + 1
-                running += int(CENTS_MULTIPLIER * chips(a))
+                running += action_chips(a)
 
     def calcStreetSPR(self, hand: Any) -> None:
         """Record the stack-to-pot ratio (SPR) at the start of each postflop street.
@@ -1898,19 +1942,6 @@ class DerivedStats:
         """
         if not getattr(self, "handsplayers", None):
             return
-
-        def chips(a):
-            act = a[1]
-            if act == "raises":
-                try:
-                    return a[2] + a[4]  # Rb + C
-                except (IndexError, TypeError):
-                    return Decimal(0)
-            if act in ("folds", "checks", "stands pat", "discards", "cashout"):
-                return Decimal(0)
-            if len(a) > 2 and isinstance(a[2], (int, float, Decimal)):
-                return a[2]
-            return Decimal(0)
 
         targets = {
             "FLOP": ("cnt_f_spr", "val_f_spr"),
@@ -1937,10 +1968,7 @@ class DerivedStats:
                     cnt_key, val_key = targets[street]
                     rem = {p: start_cash[p] - committed[p] for p in active}
                     for p in active:
-                        others = [rem[q] for q in active if q != p]
-                        if not others:
-                            continue
-                        eff = min(rem[p], max(others))
+                        eff = effective_stack_cents(rem, p, active)
                         if eff <= 0:
                             continue
                         ps = self.handsplayers[p]
@@ -1949,7 +1977,7 @@ class DerivedStats:
             for a in acts:
                 p = a[0]
                 if p in committed:
-                    committed[p] += int(CENTS_MULTIPLIER * chips(a))
+                    committed[p] += action_chips(a)
 
     def calcBetFacing(self, hand: Any) -> None:
         """Record the size of the first bet *made* on each postflop street.

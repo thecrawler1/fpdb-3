@@ -48,6 +48,7 @@ from fpdb_3_legacy.loggingFpdb import get_logger, hud_trace
 # logging has been set up in fpdb.py or HUD_main.py, use their settings:
 log = get_logger("hud_main")
 
+
 BlockKey = tuple[int | str, int]
 WindowKey = str | BlockKey
 
@@ -199,36 +200,11 @@ _ALIGN = {
 }
 
 
-def normalize_position(raw: Any) -> str:
-    """Map a stored/labelled position to a canonical panel code.
-
-    Accepts the values DerivedStats stores in HandsPlayers.position (0 = button,
-    "S" = small blind, "B" = big blind, 1.. = seats after the BB) and the panel
-    labels used in configs ("BU"/"SB"/"BB"/...). Returns one of
-    BTN/SB/BB/CO/MP/EP (or "" when unknown/empty).
-    """
-    if raw is None or raw == "":
-        return ""
-    s = str(raw).strip().upper()
-    if s in ("0", "BTN", "BU", "D", "BUTTON"):
-        return "BTN"
-    if s in ("S", "SB"):
-        return "SB"
-    if s in ("B", "BB"):
-        return "BB"
-    after_bb = {"1": "CO", "2": "MP", "3": "MP", "4": "EP", "5": "EP", "6": "EP", "7": "EP", "8": "EP", "9": "EP"}
-    return after_bb.get(s, s)
-
-
-def block_visible(block_position: str, player_position: Any) -> bool:
-    """Whether a panel bound to ``block_position`` shows for ``player_position``.
-
-    A block with no position binding is always visible; otherwise the player's
-    normalized position must match the block's.
-    """
-    if not block_position:
-        return True
-    return normalize_position(block_position) == normalize_position(player_position)
+# The position vocabulary and the position-bound visibility rule live in
+# ``hud_situation`` (#298), which the dynamic panel layer also needs. They are
+# re-exported here because this is where callers have always imported them, and
+# so the two layers cannot disagree about what "B" means.
+from fpdb_3_legacy.hud_situation import block_visible, block_visible_for, normalize_position  # noqa: E402,F401
 
 
 def false_attr(value: Any) -> bool:
@@ -279,6 +255,8 @@ class SimpleHUD(Aux_Base.AuxSeats):
         except (TypeError, ValueError):
             self.font_size = int(self.aux_params["font_size"])
         self.font = QFont(self.aux_params["font"], self.font_size)
+        self.title_font_scale = self._hud_font_scale(getattr(self.game_params, "title_font_scale", ""), 1.0)
+        self.heading_font_scale = self._hud_font_scale(getattr(self.game_params, "heading_font_scale", ""), 1.0)
 
         # store these class definitions for use elsewhere
         # this is needed to guarantee that the classes in _this_ module
@@ -296,6 +274,13 @@ class SimpleHUD(Aux_Base.AuxSeats):
         self._build_legacy_grid_arrays()
         self._build_block_layouts()
 
+    @staticmethod
+    def _hud_font_scale(value: Any, default: float) -> float:
+        try:
+            return min(2.0, max(0.5, float(value))) if value not in (None, "") else default
+        except (TypeError, ValueError):
+            return default
+
     def _positional_mode(self) -> str:
         """'all' (show every position panel, stacked) or 'current' (only the
         panel matching the live position). Defaults to 'current'."""
@@ -305,6 +290,141 @@ class SimpleHUD(Aux_Base.AuxSeats):
             if mode:
                 return str(mode).strip().lower()
         return "current"
+
+    # -- context-aware dynamic panels (#298) --------------------------------
+
+    def _panel_resolver(self) -> Any:
+        """The panel rules this table's profile enables, or None when it has none.
+
+        Built once per HUD and rebuilt when the stat set changes, because the
+        profile is what scopes the rules. A configuration with no panel rules
+        -- the shipped default -- yields None, and every caller then takes the
+        static path it always did: turning dynamic panels on is what changes
+        behaviour, and turning them off is indistinguishable from not having
+        them, which is what the issue asks for.
+        """
+        resolver = getattr(self, "_panel_resolver_cache", None)
+        cached_profile = getattr(self, "_panel_resolver_profile", None)
+        profile = getattr(self.game_params, "name", "default")
+        if resolver is not None and cached_profile == profile:
+            return resolver
+        try:
+            from fpdb_3_legacy import hud_situation
+
+            configured = self.config.get_hud_panel_rules()
+            if not configured:
+                resolver = None
+            else:
+                resolver = hud_situation.HudSituationResolver(
+                    configured,
+                    fallback=str(getattr(self.config, "hud_panel_fallback", "") or ""),
+                ).for_profile(profile)
+        except Exception:  # intentional broad catch: a broken rule set must not break the HUD
+            log.exception("Dynamic HUD panels could not be resolved; falling back to the static grid")
+            resolver = None
+        self._panel_resolver_cache = resolver
+        self._panel_resolver_profile = profile
+        return resolver
+
+    def _panel_state(self) -> Any:
+        """This table's panel memory, created on first use."""
+        state = getattr(self, "_panel_state_cache", None)
+        if state is not None:
+            return state
+        resolver = self._panel_resolver()
+        if resolver is None:
+            return None
+        from fpdb_3_legacy import hud_situation
+
+        state = hud_situation.PanelState(resolver, getattr(self.game_params, "name", "default"))
+        self._panel_state_cache = state
+        return state
+
+    def forget_dynamic_panels(self) -> None:
+        """Drop the cached panel memory, after a live-state or profile change."""
+        state = getattr(self, "_panel_state_cache", None)
+        if state is not None:
+            state.forget()
+
+    def dynamic_panel_selection(self, seat: int | str, player_id: Any) -> Any:
+        """Which dynamic panels this seat shows right now, or None when disabled.
+
+        None is the answer whenever dynamic panels are off, which is the normal
+        case: the caller then applies the position-bound rule it has always
+        applied. A seat with no live data is no different from a disabled
+        profile -- the static grid stands.
+        """
+        state = self._panel_state()
+        if state is None:
+            return None
+        pdata = self.hud.stat_dict.get(player_id) if self.hud.stat_dict else None
+        if not isinstance(pdata, dict):
+            pdata = {}
+        try:
+            from fpdb_3_legacy import hud_situation
+
+            live = hud_situation.winamax_live_state_for_player(
+                pdata,
+                self.hud.stat_dict.values() if self.hud.stat_dict else (),
+                getattr(self.hud, "live_state", None) or {},
+            )
+            context = hud_situation.HudSituationContext.from_stat_dict(pdata, live)
+            selection, _change = state.update((seat, 0), context, samples=pdata)
+            log.debug(
+                "Dynamic HUD seat=%s profile=%s context={%s} panels=%s suppressed=%s",
+                seat,
+                getattr(self.game_params, "name", "default"),
+                context.describe(),
+                selection.panels,
+                selection.suppressed,
+            )
+            return selection
+        except Exception:  # intentional broad catch: a bad rule must not blank a seat
+            log.exception("Dynamic panel selection failed for seat %s; using the static grid", seat)
+            return None
+
+    # -- analytics-backed cells (#335) --------------------------------------
+
+    def analytics_session(self) -> Any:
+        """The analytics cells *this profile* binds, or an empty session.
+
+        Scoped to the active stat set, so a cell another profile declared as
+        analytics is never taken over in a profile that has it as a native stat.
+        A profile with no analytics-backed cell gets an empty session: every
+        ``text_for`` answers ``None`` for its names, and every existing stat keeps
+        the path it always took. Cached per profile, like the panel resolver, so a
+        stat-set switch rebuilds it.
+        """
+        profile = str(getattr(self.game_params, "name", "") or "")
+        cached = getattr(self, "_analytics_session_cache", None)
+        if cached is not None and getattr(self, "_analytics_session_profile", None) == profile:
+            return cached
+        try:
+            from fpdb_3_legacy import hud_analytics_stats
+
+            session = hud_analytics_stats.AnalyticsStatSession.from_config(self.config, stat_set=profile)
+        except Exception:  # intentional broad catch: analytics must not cost a HUD its stats
+            log.exception("Could not read the analytics-backed HUD cells; those cells will show no data")
+            session = None
+        self._analytics_session_cache = session
+        self._analytics_session_profile = profile
+        return session
+
+    def publish_analytics(self, values_by_player: Any) -> None:
+        """Adopt the analytics values a finished read batch computed (#335).
+
+        Called on the Qt thread with what the worker already produced, so this
+        is a dict assignment and never a query.
+        """
+        # Built here if the first hand's labels have not refreshed yet: otherwise
+        # the opening hand's values would be dropped on a session that does not
+        # exist yet, and the cells would show no data for that hand.
+        session = self.analytics_session()
+        if session is None:
+            return
+        # Stored, not painted: the seats read it on their next refresh, which is
+        # the same refresh that already follows every new hand.
+        session.publish(values_by_player or {})
 
     def _show_hero_hud(self) -> bool:
         """Whether this stat-set should display hero stat windows."""
@@ -381,6 +501,7 @@ class SimpleHUD(Aux_Base.AuxSeats):
             stats = [[None] * nc for _ in range(nr)]
             popups = [[None] * nc for _ in range(nr)]
             tips = [[None] * nc for _ in range(nr)]
+            display_labels = [[""] * nc for _ in range(nr)]
             hudcolors = [[""] * nc for _ in range(nr)]
             hudbgcolors = [[""] * nc for _ in range(nr)]
             colorranges = [[None] * nc for _ in range(nr)]
@@ -391,6 +512,7 @@ class SimpleHUD(Aux_Base.AuxSeats):
                     stats[r][c] = st.stat_name
                     popups[r][c] = st.popup
                     tips[r][c] = st.tip
+                    display_labels[r][c] = getattr(st, "display_label", "")
                     hudcolors[r][c] = getattr(st, "hudcolor", "")
                     hudbgcolors[r][c] = getattr(st, "hudbgcolor", "")
                     colspans[r][c] = getattr(st, "colspan", 1) or 1
@@ -418,6 +540,8 @@ class SimpleHUD(Aux_Base.AuxSeats):
                     "bordercolor": getattr(blk, "bordercolor", ""),
                     "title_bgcolor": getattr(blk, "title_bgcolor", ""),
                     "title_fgcolor": getattr(blk, "title_fgcolor", ""),
+                    "title_font_scale": getattr(blk, "title_font_scale", 0),
+                    "heading_font_scale": getattr(blk, "heading_font_scale", 0),
                     "cell_width": getattr(blk, "cell_width", 0),
                     "x": getattr(blk, "x", 0),
                     "y": getattr(blk, "y", 0),
@@ -426,6 +550,7 @@ class SimpleHUD(Aux_Base.AuxSeats):
                     "stats": stats,
                     "popups": popups,
                     "tips": tips,
+                    "display_labels": display_labels,
                     "hudcolors": hudcolors,
                     "hudbgcolors": hudbgcolors,
                     "colorranges": colorranges,
@@ -585,7 +710,10 @@ class SimpleHUD(Aux_Base.AuxSeats):
             f"block={block_index} label={block.get('label', '')!r} block_pos={block.get('position', '')!r} "
             f"rel={rel_pos} abs={abs_pos} visible={visible}"
         )
-        log.warning(msg)
+        # This is per-window placement telemetry, emitted for every seat and
+        # every block on each redraw. Keep it available for diagnostics without
+        # flooding the WARNING log or hiding actionable warnings.
+        log.debug(msg)
 
         # Log to the dedicated trace log if active
         trace_logger = logging.getLogger("hud_trace")
@@ -660,6 +788,15 @@ class SimpleHUD(Aux_Base.AuxSeats):
             # stack instead (a starting layout; the user can drag to fine-tune,
             # and drags persist and override this).
             return (anchor_x, anchor_y + self._stack_offset(block_index))
+        if self.block_layouts[block_index].get("position") == "dynamic" and not (offset_x or offset_y):
+            # Only one contextual block is visible at a time, but the static
+            # core stays visible. An unpositioned dynamic block used to land
+            # exactly on top of the core, making a working selection look
+            # permanently static. Keep the two panels apart by default while
+            # preserving explicit offsets and user-dragged positions.
+            reference_height = getattr(self.hud, "ref_layout_height", None) or 546
+            gap = -96 if anchor_y > reference_height * 0.55 else 96
+            return (anchor_x, anchor_y + gap)
         return (anchor_x + offset_x, anchor_y + offset_y)
 
     def _stack_offset(self, block_index: int) -> int:
@@ -1201,7 +1338,7 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
         block_index = getattr(self, "block_index", None)
         blocks = [all_blocks[block_index]] if block_index is not None else all_blocks
         self.stat_boxes = []  # one 2D array of SimpleStat per block
-        self.block_widgets = []  # (container widget, position) per block, for show/hide
+        self.block_widgets = []  # (container widget, block metadata) per block, for show/hide
         for blk in blocks:
             container = QWidget()
             if multi:
@@ -1229,10 +1366,15 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
             if multi and blk["label"]:
                 title = self.aw.aw_class_label(blk["label"])
                 title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                title_font = QFont(self.aw.font)
+                title_scale = blk.get("title_font_scale") or getattr(self.aw, "title_font_scale", 1.0)
+                title_font.setPointSize(max(6, round(self.aw.font.pointSize() * title_scale)))
+                title.setFont(title_font)
+                title.setToolTip(blk["label"])
                 title_bg = blk.get("title_bgcolor") or blk.get("bordercolor") or panel_fg
                 title_fg = blk.get("title_fgcolor") or self.aw.bgcolor
                 title.setStyleSheet(
-                    f"background: {title_bg};color: {title_fg};font-weight: 700;padding: 1px 4px;border: 0;"
+                    f"background: {title_bg};color: {title_fg};font-weight: 700;padding: 0px 3px;border: 0;"
                 )
                 cl.addWidget(title)
             grid = QGridLayout()
@@ -1245,13 +1387,19 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
             # captions) render them at their grid positions; otherwise fall back to
             # the per-stat tip-as-header mode.
             show_headers = multi and not btexts and any(tip for row in blk["tips"] for tip in row)
+            header_font = QFont(self.aw.font)
+            heading_scale = blk.get("heading_font_scale") or getattr(self.aw, "heading_font_scale", 1.0)
+            header_font.setPointSize(max(5, round(self.aw.font.pointSize() * heading_scale)))
             for t in btexts:
                 tr, tc = t["rowcol"]
                 if not (0 <= tr < blk["nrows"] and 0 <= tc < blk["ncols"]):
                     continue
                 tlabel = self.aw.aw_class_label(t.get("label", ""))
                 tlabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                tlabel.setFont(self.aw.font)
+                tlabel.setFont(header_font if multi else self.aw.font)
+                if multi:
+                    tlabel.setWordWrap(True)
+                    tlabel.setToolTip(t.get("label", ""))
                 t_fg = t.get("fgcolor") or ""
                 t_bg = t.get("bgcolor") or ""
                 tlabel.setStyleSheet(
@@ -1264,9 +1412,14 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
                 for c in range(blk["ncols"]):
                     grid_row = r * 2 if show_headers else r
                     if show_headers:
-                        label = self.aw.aw_class_label(blk["tips"][r][c] or "")
+                        full_tip = blk["tips"][r][c] or ""
+                        display_labels = blk.get("display_labels") or []
+                        display_label = display_labels[r][c] if r < len(display_labels) and c < len(display_labels[r]) else ""
+                        label = self.aw.aw_class_label(display_label or full_tip)
                         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        label.setFont(self.aw.font)
+                        label.setFont(header_font)
+                        label.setWordWrap(True)
+                        label.setToolTip(full_tip)
                         label.setStyleSheet("font-weight: 700; padding: 0px 2px;")
                         grid.addWidget(label, grid_row, c)
                     stat_name = blk["stats"][r][c]
@@ -1317,7 +1470,7 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
             cl.addLayout(grid)
             outer.addWidget(container)
             self.stat_boxes.append(box)
-            self.block_widgets.append((container, blk.get("position", "")))
+            self.block_widgets.append((container, blk))
         # Legacy alias: keep self.stat_box pointing at the first block's grid.
         self.stat_box = self.stat_boxes[0] if self.stat_boxes else []
 
@@ -1336,7 +1489,7 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
         if i == "table":
             self.show()
             has_visible_block = False
-            for box, (container, block_pos) in zip(self.stat_boxes, self.block_widgets, strict=False):
+            for box, (container, block) in zip(self.stat_boxes, self.block_widgets, strict=False):
                 container.setVisible(True)
                 has_visible_block = True
                 for row in box:
@@ -1370,9 +1523,16 @@ class SimpleStatWindow(Aux_Base.SeatWindow):
         # import-driven HUD only knows the *previous* hand's position and would
         # otherwise display a one-hand-stale panel. "current" filters by position.
         show_all_positions = self.aw._positional_mode() == "all"
+        # Context-aware panels (#298) refine this: when the profile has panel
+        # rules, a block the selection names is shown and a block it does not
+        # name keeps the position rule, so the static core is untouched.
+        selection = self.aw.dynamic_panel_selection(i, player_id)
         has_visible_block = False
-        for box, (container, block_pos) in zip(self.stat_boxes, self.block_widgets, strict=False):
-            visible = True if show_all_positions else block_visible(block_pos, player_pos)
+        for box, (container, block) in zip(self.stat_boxes, self.block_widgets, strict=False):
+            if selection is not None:
+                visible = block_visible_for(block, selection, player_pos)
+            else:
+                visible = True if show_all_positions else block_visible(block.get("position", ""), player_pos)
             container.setVisible(visible)
             if not visible:
                 continue
@@ -1420,11 +1580,17 @@ class SimpleStat:
         self.lab.stat_dict = None
         self.widget = self.lab
         self.stat_dict: dict[Any, Any] | None = None
+        self.aw = aw
         self.hud = aw.hud
         self.aux_params = aw.aux_params
         self.font_size = getattr(aw, "font_size", self.aux_params.get("font_size", 8))
         self.colors = colors or {}
         self._bg = ""
+        # The six-tuple Stats returns, declared here rather than inferred from
+        # the first branch that assigns it: the analytics path (#335) builds its
+        # own five strings and a tooltip, and the narrower tuple those literals
+        # imply would then reject ``do_table_stat``'s own return type.
+        self.number: tuple[Any, ...] | None = None
 
     def update(self, player_id: int | str | None, stat_dict: dict) -> None:
         """Update the statistic display for a given player.
@@ -1437,6 +1603,28 @@ class SimpleStat:
         """
         self.stat_dict = stat_dict  # So the Simple_stat obj always has a fresh stat_dict
         self.lab.stat_dict = stat_dict
+
+        # An analytics-backed cell (#335) asks its session first. ``None`` from
+        # ``text_for`` means "not an analytics cell", so a native stat never
+        # takes this branch; a bound cell whose batch has not landed yet shows
+        # the no-data convention rather than falling through to a same-named
+        # column-backed stat, which would be a different number under this name.
+        session = self._analytics_session()
+        if session is not None:
+            text = session.text_for(self.stat, player_id)
+            if text is not None:
+                value = session.value_for(self.stat, player_id)
+                self.number = (
+                    self.stat,
+                    text,
+                    "",
+                    "",
+                    "",
+                    value.tooltip() if value is not None else str(self.stat),
+                )
+                self.lab.setText(str(text))
+                self._apply_color_range()
+                return
 
         # Two scopes, both computed in Stats (the single source of truth), never
         # with inline SQL here (this runs on the UI thread, once per label).
@@ -1458,6 +1646,29 @@ class SimpleStat:
         if self.number:
             self.lab.setText(str(self.number[1]))
         self._apply_color_range()
+
+    def _analytics_session(self) -> Any:
+        """The table's analytics session, or ``None`` when this profile has none.
+
+        The answer is checked by *type*, not merely for truthiness: any object
+        with an ``analytics_session`` attribute would otherwise be accepted, and
+        a duck-typed or auto-mocked ``aw`` would then answer ``text_for`` with
+        something that is not ``None`` for every stat -- silently taking every
+        native stat off the path it has always taken. Only a real session is a
+        session; anything else falls back to the native path.
+        """
+        aw = getattr(self, "aw", None)
+        accessor = getattr(aw, "analytics_session", None)
+        if not callable(accessor):
+            return None
+        try:
+            from fpdb_3_legacy import hud_analytics_stats
+
+            session = accessor()
+        except Exception:  # intentional broad catch: the label must still paint
+            log.exception("Could not reach the analytics session for stat %s", self.stat)
+            return None
+        return session if isinstance(session, hud_analytics_stats.AnalyticsStatSession) else None
 
     def _apply_color_range(self) -> None:
         """Colour the label by value using the PT4-style thresholds (if any).
@@ -1512,7 +1723,7 @@ class EmptyStat:
         self.widget.stat_dict = None
         self.widget.aw_popup = None
 
-    def update(self, _player_id: str, _stat_dict: dict) -> None:
+    def update(self, _player_id: int | str | None, _stat_dict: dict) -> None:
         return
 
 

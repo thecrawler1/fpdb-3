@@ -477,6 +477,12 @@ class fpdb(QMainWindow):
         lines.append("\nAssign the new stat-set / popup to a game in HUD Preferences.")
         QMessageBox.information(self, _("PT4 HUD imported"), "\n".join(lines))
 
+    def dia_stat_packs(self, widget=None, data=None) -> None:
+        """Manage user-installed declarative stat packs (#403)."""
+        from fpdb_3_legacy.stat_packs_dialog import open_stat_packs
+
+        open_stat_packs(self)
+
     def dia_import_pt4stat(self, widget, data=None) -> None:
         """Import PokerTracker 4 .pt4stat custom-statistic definitions.
 
@@ -1017,6 +1023,87 @@ class fpdb(QMainWindow):
                 "Re-start fpdb to use this option.",
             )
 
+    def help_research_omaha(self, widget, data=None) -> None:
+        """Open the Omaha reading of the Research Browser (#353).
+
+        The quick start teaches the browser with Hold'em examples, and the one
+        view that cannot work on a four-card game is the one it leads with. An
+        Omaha player deserves an entry of their own rather than a guide that
+        keeps saying "not for you".
+        """
+        from fpdb_3_legacy import help_links
+
+        if not help_links.open_help("research-omaha"):
+            self.info_box(
+                "Research Browser for Omaha",
+                f"The guide is published at {help_links.DOCS_URL}/research-omaha.md",
+            )
+
+    def dia_rebuild_analytics(self, widget, data=None) -> None:
+        """Re-derive the analytics rows this database is missing (#351).
+
+        A database imported before the analytics layers existed holds hands and
+        actions but none of the rows derived from them, so every Research
+        Browser question answers "0 decisions" and the context-aware HUD panels
+        have nothing to read. The rebuild has existed since #305 and nothing
+        called it: only the demo-workspace tool did, which is no help to a user
+        with their own history.
+        """
+        from fpdb_3_legacy.analytics_lifecycle import rebuildable_subsystems, subsystems_ahead_of_code
+        from fpdb_3_legacy.analytics_rebuild import rebuild_subsystems
+
+        if not self.obtain_global_lock("dia_rebuild_analytics"):
+            self.warning_box(
+                "Cannot open Database Maintenance window because"
+                " other windows have been opened. Re-start fpdb to use this option.",
+            )
+            return
+        try:
+            # Deliberately not stale_subsystems(): that list includes rows a
+            # *newer* fpdb wrote, which this version cannot read as current but
+            # must not overwrite with its own older rules either.
+            stale = list(rebuildable_subsystems(self.db))
+            ahead = list(subsystems_ahead_of_code(self.db))
+            if ahead:
+                self.warning_box(
+                    "These analytics rows were written by a newer version of fpdb and are left "
+                    f"untouched, because re-deriving them here would replace them with older "
+                    f"rules:\n\n    {', '.join(ahead)}\n\n"
+                    "Upgrade fpdb to read them.",
+                    "Rebuild Analytics Data",
+                )
+            if not stale:
+                self.info_box("Rebuild Analytics Data", "There is nothing for this version to rebuild.")
+                return
+            confirm = QMessageBox(
+                QMessageBox.Warning,
+                "Rebuild Analytics Data",
+                "Confirm rebuilding the analytics data",
+                QMessageBox.Yes | QMessageBox.No,
+                self,
+            )
+            confirm.setInformativeText(
+                f"These subsystems were derived by older rules, or never derived at all:\n\n"
+                f"    {', '.join(stale)}\n\n"
+                "Re-deriving them reads the hands already stored -- no hand history files are "
+                "needed and no hand ids change. It can take a while on a large database.",
+            )
+            if confirm.exec() != QMessageBox.Yes:
+                log.info("User cancelled rebuilding analytics data")
+                return
+            log.info("Rebuilding analytics data: %s", stale)
+            result = rebuild_subsystems(self.db, self.config, stale)
+            log.info("Analytics rebuild finished: %s", result)
+            summary = f"{result.rebuilt} of {result.scanned} hands re-derived."
+            if result.failed:
+                # Named rather than buried in the log: a rebuild that silently
+                # derived nothing is what left the Research Browser empty in the
+                # first place.
+                summary += f"\n\n{result.failed} hand(s) failed. First: {result.failures[0]}"
+            self.info_box("Rebuild Analytics Data", summary)
+        finally:
+            self.release_global_lock()
+
     def dia_rebuild_indexes(self, widget, data=None) -> None:
         if self.obtain_global_lock("dia_rebuild_indexes"):
             self.dia_confirm = QMessageBox(
@@ -1080,6 +1167,35 @@ class fpdb(QMainWindow):
 
         # Dialog handles saving and reloading itself
         dia.exec()
+
+    def dia_session_guard(self, widget=None, data=None) -> None:
+        """Open the Session Guard (#395): limits for the session being played."""
+        from fpdb_3_legacy.session_guard_dialog import (
+            SessionGuardAlert,
+            SessionGuardDialog,
+            SessionGuardIndicator,
+            SessionGuardMonitor,
+        )
+
+        if getattr(self, "session_guard", None) is None:
+            # One monitor for the window's lifetime: it keeps running with the dialog closed,
+            # and reads through the window's current connection and configuration so a
+            # configuration reload is followed.
+            self.session_guard = SessionGuardMonitor(lambda: self.db, lambda: self.config, self)
+            self.session_guard_alert = SessionGuardAlert(self.session_guard, self)
+            self.session_guard.alerts.connect(lambda _fired: self.session_guard_alert.show_pending())
+            self.session_guard_indicator = SessionGuardIndicator(self.session_guard, self.dia_session_guard, self)
+            self.statusBar().addPermanentWidget(self.session_guard_indicator)
+        dialog = getattr(self, "session_guard_dialog", None)
+        if dialog is None:
+            # No configuration pinned: the dialog reads the window's current one, which a
+            # reload replaces while the modeless dialog stays open.
+            dialog = SessionGuardDialog(self.session_guard, parent=self)
+            # Kept so the modeless dialog is not garbage-collected while open.
+            self.session_guard_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def launch_swc_capture(self, widget=None, data=None) -> None:
         """Launch the SwC Poker Console & Replayer."""
@@ -1799,6 +1915,81 @@ class fpdb(QMainWindow):
             "Ring Player Stats",
             lambda module: module.GuiRingPlayerStats(self.config, self.sql, self),
             module="fpdb_3_legacy.GuiRingPlayerStats",
+        )
+
+    def tab_research_browser(self, widget, data=None) -> None:
+        # Lazily imported like the other tabs: the browser pulls the analytics
+        # engine and its view tree, and most sessions never open this tab.
+        self.open_tab(
+            "Research Browser",
+            lambda module: module.GuiResearchBrowser(self.config, self.sql, self),
+            module="fpdb_3_legacy.GuiResearchBrowser",
+        )
+
+    def tab_study_explorer(self, widget, data=None) -> None:
+        """Open the spot-first Study Explorer (#360)."""
+
+        def build_explorer(module):
+            explorer = module.GuiStudyExplorer(self.config, self.sql, self)
+            explorer.study_opened.connect(self._open_study_dashboard)
+            explorer.differences_requested.connect(self._open_study_differences)
+            return explorer
+
+        self.open_tab(
+            "Study Explorer",
+            build_explorer,
+            module="fpdb_3_legacy.GuiStudyExplorer",
+        )
+
+    def _open_study_dashboard(self, selection) -> None:
+        """Open the synchronized dashboard for a Study Explorer selection (#361)."""
+        self.open_tab(
+            f"Study · {selection.study.title}",
+            lambda module: module.GuiStudyDashboard(
+                self.config,
+                self.sql,
+                self,
+                selection=selection,
+            ),
+            module="fpdb_3_legacy.GuiStudyDashboard",
+        )
+
+    def _open_study_differences(self) -> None:
+        """Open the curated Hero-versus-Field discovery page (#365)."""
+
+        def build_differences(module):
+            differences = module.GuiStudyDifferences(self.config, self.sql, self)
+            differences.study_requested.connect(self._open_difference_study)
+            return differences
+
+        self.open_tab(
+            "Biggest Differences vs Field",
+            build_differences,
+            module="fpdb_3_legacy.GuiStudyDifferences",
+        )
+
+    def _open_difference_study(self, detail) -> None:
+        """Open the study and preserve the clicked difference context (#365)."""
+
+        def build_dashboard(module):
+            from fpdb_3_legacy.research_study_dashboard import StudyDashboardModel
+
+            model = StudyDashboardModel(detail.selection)
+            model.set_active_panel(detail.panel_id)
+            for name, value in detail.cross_filters.items():
+                try:
+                    model.add_cross_filter(name, value)
+                except ValueError:
+                    # A dimension can be descriptive without being a legal
+                    # query filter; the study itself remains a valid target.
+                    continue
+            model.set_focus_filters(detail.focus_filters)
+            return module.GuiStudyDashboard(self.config, self.sql, self, model=model)
+
+        self.open_tab(
+            f"Study · {detail.row.spot}",
+            build_dashboard,
+            module="fpdb_3_legacy.GuiStudyDashboard",
         )
 
     def tab_opponents_report(self, widget, data=None) -> None:

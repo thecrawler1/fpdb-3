@@ -67,6 +67,21 @@ def test_build_block_layouts_propagates_scope():
     assert [b["cell_width"] for b in aw.block_layouts] == [44, 0]
 
 
+def test_unpositioned_dynamic_block_does_not_cover_the_static_core():
+    aw = Aux_Hud.SimpleHUD.__new__(Aux_Hud.SimpleHUD)
+    aw.block_layouts = [{"position": ""}, {"position": "dynamic"}]
+    aw._seat_anchor_ref = {1: (100, 100), 2: (100, 400)}
+    aw._positional_mode = lambda: "current"
+    aw.hud = types.SimpleNamespace(ref_layout_height=546)
+
+    assert aw._default_canonical((1, 0)) == (100, 100)
+    assert aw._default_canonical((1, 1)) == (100, 196)
+    assert aw._default_canonical((2, 1)) == (100, 304)
+
+    aw.block_layouts[1]["y"] = 32
+    assert aw._default_canonical((1, 1)) == (100, 132), "explicit offsets take precedence"
+
+
 def test_multiblock_stat_set_parses_panels():
     ss = _ss('<ss name="t" rows="2" cols="2">'
              '<block label="SB 3h" rows="1" cols="2">'
@@ -227,11 +242,22 @@ def _fake_aw(block_layouts, position="", positional_mode="all"):
         block_layouts=block_layouts, hud=hud, nrows=1, ncols=1,
         game_params=game_params, config=config,
         get_id_from_seat=lambda _s: 1,
+        # The real SimpleHUD exposes dynamic_panel_selection; keep this
+        # lightweight test double on the same contract so the static-grid
+        # rendering tests exercise their intended fallback path.
+        dynamic_panel_selection=lambda _seat, _player_id: None,
     )
     aw._show_hero_hud = types.MethodType(Aux_Hud.SimpleHUD._show_hero_hud, aw)
     aw._is_hero_player = types.MethodType(Aux_Hud.SimpleHUD._is_hero_player, aw)
     aw._hide_seat_for_villain_only = types.MethodType(Aux_Hud.SimpleHUD._hide_seat_for_villain_only, aw)
     aw._positional_mode = types.MethodType(Aux_Hud.SimpleHUD._positional_mode, aw)
+    # The dynamic panel selection (#298) is part of the same call path the stat
+    # window walks. The fake has no panel rules, so the real methods answer
+    # "panels are off" and the position rule decides -- which is the state these
+    # tests are about, rather than a stub that could drift from production.
+    aw.dynamic_panel_selection = types.MethodType(Aux_Hud.SimpleHUD.dynamic_panel_selection, aw)
+    aw._panel_state = types.MethodType(Aux_Hud.SimpleHUD._panel_state, aw)
+    aw._panel_resolver = types.MethodType(Aux_Hud.SimpleHUD._panel_resolver, aw)
     return aw
 
 

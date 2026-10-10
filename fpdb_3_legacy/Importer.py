@@ -17,6 +17,7 @@ from __future__ import annotations
 import builtins
 import contextlib
 import datetime
+import json
 import os
 import re
 import shutil
@@ -26,7 +27,7 @@ from time import process_time, time
 from typing import Any
 
 import zmq as _zmq
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtWidgets import QDialog, QLabel, QProgressBar, QVBoxLayout
 
 from fpdb_3_legacy import Configuration, Database, IdentifySite, db_profile
@@ -72,6 +73,80 @@ log = get_logger("importer")
 IMPORTER_FILE_READ_ERRORS = (OSError, UnicodeDecodeError)
 ZMQ_CLOSE_ERRORS = (RuntimeError, zmq.ZMQError)
 
+#: How often an adopted import is checked for having finished, in milliseconds.
+ORPHAN_POLL_MS = 500
+
+#: Imports still running after the tab that started them was closed (#347), each
+#: mapped to the cleanup its tab owed. The thread is kept referenced here for a
+#: second reason: dropping the last reference to a running QThread destroys it
+#: mid-run.
+_orphaned_imports: dict[Any, Any] = {}
+_orphan_timer: Any = None
+
+
+def adopt_orphaned_import(thread: Any, cleanup: Any) -> None:
+    """Take over a closed tab's running import and clean up after it (#347).
+
+    A tab that closes while its import overruns cannot wait for it -- the wait
+    runs on the UI thread and is bounded on purpose -- so the worker outlives
+    the widget. What it leaves behind is not only database connections: the
+    global lock is released by a slot of that widget, and a lock held past the
+    tab blocks every later import and every database maintenance action until
+    the application is restarted.
+
+    So the thread is kept here and ``cleanup`` is run once it has really
+    finished. ``cleanup`` must touch nothing owned by the UI, because by then
+    the widget it came from is gone.
+
+    Finishing is detected by polling ``isRunning()`` rather than by connecting
+    to the worker's ``finished`` signal: both import threads shadow QThread's
+    own ``finished`` with a signal of their own, emitted from inside ``run()``
+    and not at all on some paths -- the auto-import worker returns without
+    emitting anything when the database is away. Polling is the only check that
+    covers every way a run can end.
+    """
+    if thread is None or not thread.isRunning():
+        _run_orphan_cleanup(cleanup)
+        return
+    _orphaned_imports[thread] = cleanup
+    _start_orphan_timer()
+
+
+def reap_orphaned_imports() -> None:
+    """Run the cleanup owed by every adopted import that has finished."""
+    for thread in [thread for thread in _orphaned_imports if not thread.isRunning()]:
+        _run_orphan_cleanup(_orphaned_imports.pop(thread))
+    if not _orphaned_imports and _orphan_timer is not None:
+        _orphan_timer.stop()
+
+
+def _run_orphan_cleanup(cleanup: Any) -> None:
+    try:
+        cleanup()
+    except Exception:  # noqa: BLE001 - nothing is left to report this to
+        log.exception("Could not clean up after an import that outlived its tab")
+
+
+def _start_orphan_timer() -> None:
+    global _orphan_timer  # noqa: PLW0603 - one timer for the process, owned by no widget
+    if _orphan_timer is None:
+        try:
+            _orphan_timer = QTimer()
+            _orphan_timer.timeout.connect(reap_orphaned_imports)
+        except Exception:  # noqa: BLE001 - no Qt loop (a CLI import): nothing to poll with
+            log.debug("No Qt timer available to reap orphaned imports", exc_info=True)
+            _orphan_timer = None
+            return
+    if not _orphan_timer.isActive():
+        _orphan_timer.start(ORPHAN_POLL_MS)
+
+
+#: Prefix marking a ZMQ message that carries a live action instead of a hand id
+#: (#336). A hand id is a bare string, so the receiver tells the two apart by
+#: this prefix; the JSON payload behind it is built by the capture and routed by
+#: HUD_main to the HUD whose table it names.
+LIVE_ACTION_PREFIX = "live:"
+
 # Round-trip profiling (off unless FPDB_DB_PROFILE=1). Module-level rather than
 # per-Importer: the profile it reports is process-wide anyway, and a profiling
 # hook must not be something the import path can trip over.
@@ -109,6 +184,24 @@ class ZMQSender:
             log.warning(f"ZMQ queue full, dropping hand ID {hand_id}")
         except zmq.ZMQError as e:
             log.exception(f"Failed to send hand ID {hand_id}: {e}")
+
+    def send_live_action(self, payload) -> None:
+        """Send one live action payload to the HUD, best effort (#336).
+
+        ``payload`` is a JSON-able dict naming the hand, the table and the room's
+        own action record. Actions arrive many per hand and the stream never
+        stops for them, so a full queue drops the action with a warning rather
+        than blocking the capture: the next action describes the table at least
+        as well as the one lost, and the hand-refresh path remains behind it.
+        """
+        try:
+            message = LIVE_ACTION_PREFIX + json.dumps(payload, default=str)
+            self.socket.send_string(message, zmq.NOBLOCK)
+            log.debug("Sent live action for hand %s via ZMQ", payload.get("hand_id"))
+        except zmq.Again:
+            log.warning("ZMQ queue full, dropping a live action for hand %s", payload.get("hand_id"))
+        except (zmq.ZMQError, TypeError, ValueError) as e:
+            log.warning("Could not send a live action for hand %s: %s", payload.get("hand_id"), e)
 
     def close(self) -> None:
         """Close the ZMQ socket and terminate the context.
@@ -390,6 +483,30 @@ class Importer:
         # Reassigned rather than cleared in place: callers that build an
         # Importer without running __init__ rely on this creating the cache.
         self.failed_files = FailureCache()
+
+    def close(self) -> None:
+        """Release every database connection this importer opened (#282).
+
+        An importer holds its own connection plus one per writer thread, and
+        nothing else owns them. Until this existed the only way to let them go
+        was to end the process, so a caller that imports and then deletes or
+        replaces the database file found it still in use -- harmless on POSIX,
+        which unlinks an open file happily, and a ``WinError 32`` on Windows,
+        where it is not allowed.
+
+        Idempotent and best-effort: closing is what shutdown paths do while
+        something else has already gone wrong, so one connection that refuses
+        must not strand the others behind it.
+        """
+        databases = [getattr(self, "database", None), *(getattr(self, "writerdbs", None) or [])]
+        self.writerdbs = []
+        for database in databases:
+            if database is None:
+                continue
+            try:
+                database.close_connection()
+            except Exception:  # noqa: BLE001 - one bad handle must not keep the rest open
+                log.exception("Could not close an importer database connection")
 
     def logImport(self, type, file, stored, dups, partial, skipped, errs, ttime, id) -> None:
         """Log the results of an import operation to the database.
@@ -1363,6 +1480,7 @@ class Importer:
                                 [],
                             )  # making sure we don't insert data from this hand
                             self.database.bbulk = [b for b in self.database.bbulk if hand.dbid_hands != b[0]]
+                            self.database.bfbulk = [b for b in self.database.bfbulk if hand.dbid_hands != b[0]]
                             hand.updateSessionsCache(self.database, None, doinsert)
                             hand.insertHands(
                                 self.database,
@@ -1390,6 +1508,8 @@ class Importer:
                             self.settings["testData"],
                         )
                         hand.insertHandsStove(self.database, doinsert)
+                        hand.insertHandsSituations(self.database, doinsert)
+                        hand.insertHandStates(self.database, doinsert)
                         hand.insertHandsShowdown(self.database, doinsert)
                         hand.insertHandsCashout(self.database, doinsert)
 

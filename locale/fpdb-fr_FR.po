@@ -5061,3 +5061,345 @@ msgstr "Aucune main ne correspond aux filtres sélectionnés."
 
 msgid "The database holds hands, but none of them match this selection.\n\nWiden the filters (dates, limits, games, seats) and refresh."
 msgstr "La base contient des mains, mais aucune ne correspond à cette sélection.\n\nÉlargissez les filtres (dates, limites, jeux, sièges) puis rafraîchissez."
+
+msgid "Copy hand history"
+msgstr "Copier l'historique de la main"
+
+msgid "Copy as text"
+msgstr "Copier en texte"
+
+msgid "Copy as Markdown"
+msgstr "Copier en Markdown"
+
+msgid "Copy as Markdown in BB"
+msgstr "Copier en Markdown (en BB)"
+
+msgid "Share..."
+msgstr "Partager..."
+
+msgid "Share hand"
+msgstr "Partager la main"
+
+msgid "Copy or save this hand as text, Markdown or forum code"
+msgstr "Copier ou enregistrer cette main en texte, Markdown ou code forum"
+
+msgid "This hand could not be rendered:\n%s"
+msgstr "Impossible de mettre en forme cette main :\n%s"
+
+msgid "This game has no big blind to count in."
+msgstr "Ce jeu n'a pas de grosse blinde pour compter en BB."
+
+msgid "Names"
+msgstr "Noms"
+
+msgid "Amounts"
+msgstr "Montants"
+
+msgid "Include"
+msgstr "Inclure"
+
+msgid "Copy"
+msgstr "Copier"
+
+msgid "Save..."
+msgstr "Enregistrer..."
+
+msgid "Save hand"
+msgstr "Enregistrer la main"
+
+msgid "Could not save the hand:\n%s"
+msgstr "Impossible d'enregistrer la main :\n%s"
+
+msgid "Plain text"
+msgstr "Texte brut"
+
+msgid "Markdown"
+msgstr "Markdown"
+
+msgid "Forum (BBCode)"
+msgstr "Forum (BBCode)"
+
+msgid "Hide every name (Hero, Villain 1 ...)"
+msgstr "Masquer tous les noms (Hero, Villain 1 ...)"
+
+msgid "Keep my name, hide opponents"
+msgstr "Garder mon nom, masquer les adversaires"
+
+msgid "Keep every name"
+msgstr "Garder tous les noms"
+
+msgid "Money / chips"
+msgstr "Argent / jetons"
+
+msgid "Big blinds"
+msgstr "Grosses blindes"
+
+msgid "Table name"
+msgstr "Nom de la table"
+
+msgid "Hand number"
+msgstr "Numéro de la main"
+
+msgid "Date and time"
+msgstr "Date et heure"
+
+msgid "Stacks"
+msgstr "Tapis"
+
+msgid "Showdown and results"
+msgstr "Abattage et résultats"
+
+msgid "Rake"
+msgstr "Rake"
+
+msgid "EV cashout"
+msgstr "Cashout EV"
+
+msgid "Stack"
+msgstr "Tapis"
+
+msgid "Stack (bb)"
+msgstr "Tapis (bb)"
+
+msgid "Stat Packs"
+msgstr "Packs de stats"
+
+msgid "Import, enable, disable, uninstall and export declarative stat packs"
+msgstr "Importer, activer, désactiver, désinstaller et exporter des packs de stats déclaratives"
+
+msgid "Stat packs"
+msgstr "Packs de stats"
+
+msgid "Stat pack"
+msgstr "Pack de stats"
+
+msgid "Built-in"
+msgstr "Intégré"
+
+msgid "User installed"
+msgstr "Installé par l'utilisateur"
+
+msgid "Disabled"
+msgstr "Désactivé"
+
+msgid "Invalid"
+msgstr "Invalide"
+
+msgid "Pack"
+msgstr "Pack"
+
+msgid "Stats"
+msgstr "Stats"
+
+msgid "Version"
+msgstr "Version"
+
+msgid "Author"
+msgstr "Auteur"
+
+msgid "Restart fpdb and the HUD to use the change everywhere."
+msgstr "Redémarrez fpdb et le HUD pour appliquer le changement partout."
+
+msgid "A stat pack adds declarative stats, and optionally Research presets, without changing fpdb. Packs are data only: no Python, no SQL."
+msgstr "Un pack de stats ajoute des stats déclaratives, et éventuellement des presets de Research, sans modifier fpdb. Les packs ne contiennent que des données : ni Python, ni SQL."
+
+msgid "Import pack..."
+msgstr "Importer un pack..."
+
+msgid "Enable"
+msgstr "Activer"
+
+msgid "Disable"
+msgstr "Désactiver"
+
+msgid "Uninstall"
+msgstr "Désinstaller"
+
+msgid "Export..."
+msgstr "Exporter..."
+
+msgid "This pack is not loaded:"
+msgstr "Ce pack n'est pas chargé :"
+
+msgid "Stats:"
+msgstr "Stats :"
+
+msgid "Location:"
+msgstr "Emplacement :"
+
+msgid "Import stat pack"
+msgstr "Importer un pack de stats"
+
+msgid "All files"
+msgstr "Tous les fichiers"
+
+msgid "This pack is already installed. Replace it with this version?"
+msgstr "Ce pack est déjà installé. Le remplacer par cette version ?"
+
+msgid "Could not read the pack:\n%s"
+msgstr "Impossible de lire le pack :\n%s"
+
+msgid "Installed %s."
+msgstr "%s installé."
+
+msgid "This pack cannot be installed:"
+msgstr "Ce pack ne peut pas être installé :"
+
+msgid "Enabled %s."
+msgstr "%s activé."
+
+msgid "Disabled %s."
+msgstr "%s désactivé."
+
+msgid "Uninstall stat pack"
+msgstr "Désinstaller le pack de stats"
+
+msgid "Uninstall %s?"
+msgstr "Désinstaller %s ?"
+
+msgid "Uninstalled %s."
+msgstr "%s désinstallé."
+
+msgid "Export stat pack"
+msgstr "Exporter le pack de stats"
+
+msgid "Exported to %s."
+msgstr "Exporté vers %s."
+
+msgid "The pack state was not changed:\n%s"
+msgstr "L'état du pack n'a pas été modifié :\n%s"
+
+msgid "Solver review (PreflopAdvisor)..."
+msgstr "Revue solver (PreflopAdvisor)..."
+
+msgid "Solver review"
+msgstr "Revue solver"
+
+msgid "Solver review..."
+msgstr "Revue solver..."
+
+msgid "Send this hand's preflop decisions to PreflopAdvisor"
+msgstr "Envoyer les décisions préflop de cette main à PreflopAdvisor"
+
+msgid "This decision"
+msgstr "Cette décision"
+
+msgid "Every hero decision of the hand"
+msgstr "Toutes les décisions du héros dans la main"
+
+msgid "Review:"
+msgstr "Revoir :"
+
+msgid "Open it in PreflopAdvisor, or save the file and load it there with Review Hands > Load a hand review."
+msgstr "Ouvrez-la dans PreflopAdvisor, ou enregistrez le fichier et chargez-le avec Review Hands > Load a hand review."
+
+msgid "This hand cannot be sent to PreflopAdvisor."
+msgstr "Cette main ne peut pas être envoyée à PreflopAdvisor."
+
+msgid "Save for PreflopAdvisor..."
+msgstr "Enregistrer pour PreflopAdvisor..."
+
+msgid "Copy JSON"
+msgstr "Copier le JSON"
+
+msgid "Save hand review"
+msgstr "Enregistrer la revue de main"
+
+msgid "Hand review (*.json)"
+msgstr "Revue de main (*.json)"
+
+msgid "Could not save the hand review:\n%s"
+msgstr "Impossible d'enregistrer la revue de main :\n%s"
+
+msgid "Open in PreflopAdvisor"
+msgstr "Ouvrir dans PreflopAdvisor"
+
+msgid "PreflopAdvisor could not be started:\n%s\n\nLocate it?"
+msgstr "Impossible de démarrer PreflopAdvisor :\n%s\n\nIndiquer où il se trouve ?"
+
+msgid "Locate PreflopAdvisor"
+msgstr "Localiser PreflopAdvisor"
+
+msgid "%s is not a program that can be started."
+msgstr "%s n'est pas un programme qui peut être démarré."
+
+msgid "A Session Guard limit has been reached."
+msgstr "Une limite du Session Guard a été atteinte."
+
+msgid "Acknowledge"
+msgstr "Acquitter"
+
+msgid "Alerts for the session being played: loss, win, duration, hands, drawdown"
+msgstr "Alertes pour la session en cours : perte, gain, durée, mains, drawdown"
+
+msgid "Alerts only: fpdb never closes, sits out or otherwise touches a poker client. The session is the Session Viewer's: cash hands, ended by a 30-minute pause."
+msgstr "Alertes uniquement : fpdb ne ferme jamais un client de poker, ne vous met jamais en sit-out et n'y touche d'aucune façon. La session est celle du Session Viewer : mains cash, terminée par une pause de 30 minutes."
+
+msgid "Apply"
+msgstr "Appliquer"
+
+msgid "Choose at least one limit to watch."
+msgstr "Choisissez au moins une limite à surveiller."
+
+msgid "Could not save the defaults:\n%s"
+msgstr "Impossible d'enregistrer les valeurs par défaut :\n%s"
+
+msgid "Drawdown from peak (BB)"
+msgstr "Drawdown depuis le pic (BB)"
+
+msgid "Drawdown from peak (money)"
+msgstr "Drawdown depuis le pic (argent)"
+
+msgid "Later"
+msgstr "Plus tard"
+
+msgid "Limits for this session"
+msgstr "Limites pour cette session"
+
+msgid "Loss (BB)"
+msgstr "Perte (BB)"
+
+msgid "Loss (money)"
+msgstr "Perte (argent)"
+
+msgid "Not running."
+msgstr "Arrêté."
+
+msgid "Reset alerts"
+msgstr "Réarmer les alertes"
+
+msgid "Save as defaults"
+msgstr "Enregistrer par défaut"
+
+msgid "Session Guard"
+msgstr "Session Guard"
+
+msgid "Session Guard: click to see or change the limits"
+msgstr "Session Guard : cliquez pour voir ou modifier les limites"
+
+msgid "Session Guard: no session in progress"
+msgstr "Session Guard : aucune session en cours"
+
+msgid "Session Guard: {result} · {duration} · {hands} hands"
+msgstr "Session Guard : {result} · {duration} · {hands} mains"
+
+msgid "Session duration"
+msgstr "Durée de la session"
+
+msgid "Stop"
+msgstr "Arrêter"
+
+msgid "Win (BB)"
+msgstr "Gain (BB)"
+
+msgid "Win (money)"
+msgstr "Gain (argent)"
+
+msgid "{count} limit(s) reached"
+msgstr "{count} limite(s) atteinte(s)"
+
+msgid "{label}: unavailable (a hand has no big blind) / {threshold}"
+msgstr "{label} : indisponible (une main n'a pas de big blind) / {threshold}"
+
+msgid "{value} BB"
+msgstr "{value} BB"

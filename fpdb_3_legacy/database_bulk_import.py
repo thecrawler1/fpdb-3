@@ -22,6 +22,8 @@ from datetime import datetime
 from time import time
 from typing import TYPE_CHECKING, Any
 
+from fpdb_3_legacy.action_events import ACTION_EVENT_COLUMNS, ACTION_EVENT_DEFAULTS
+from fpdb_3_legacy.board_features import BOARD_FEATURE_COLUMNS, BOARD_FEATURE_DEFAULTS
 from fpdb_3_legacy.database_schema import HANDS_PLAYERS_KEYS
 from fpdb_3_legacy.Exceptions import FpdbError
 from fpdb_3_legacy.loggingFpdb import get_logger
@@ -64,6 +66,8 @@ class DatabaseBulkImportMixin:
     pcbulk: dict[Any, Any]
     hsbulk: list[Any]
     hsdbulk: list[Any]
+    hsb2bulk: list[Any]  # HandsSituations bulk inserts (#305)
+    hstbulk: list[Any]  # HandStates bulk inserts (#302)
     hcobulk: list[Any]
     panbulk: list[Any]
     htbulk: list[Any]
@@ -351,6 +355,7 @@ class DatabaseBulkImportMixin:
         self.siteHandNos: list[Any] = []  # cache of siteHandNo
         self.hbulk: list[Any] = []  # Hands bulk inserts
         self.bbulk: list[Any] = []  # Boards bulk inserts
+        self.bfbulk: list[Any] = []  # BoardFeatures bulk inserts
         self.hpbulk: list[Any] = []  # HandsPlayers bulk inserts
         self.habulk: list[Any] = []  # HandsActions bulk inserts
         self.hcbulk: dict[Any, Any] = {}  # HudCache bulk inserts
@@ -358,6 +363,8 @@ class DatabaseBulkImportMixin:
         self.pcbulk: dict[Any, Any] = {}  # PositionsCache bulk inserts
         self.hsbulk: list[Any] = []  # HandsStove bulk inserts
         self.hsdbulk: list[Any] = []  # HandsShowdown bulk inserts
+        self.hsb2bulk: list[Any] = []  # HandsSituations bulk inserts (#305)
+        self.hstbulk: list[Any] = []  # HandStates bulk inserts (#302)
         self.hcobulk: list[Any] = []  # HandsCashout bulk inserts
         self.panbulk: list[Any] = []  # PlayerAutoNotes bulk upserts
         self.htbulk: list[Any] = []  # HandsPots bulk inserts
@@ -481,6 +488,22 @@ class DatabaseBulkImportMixin:
             c = self.get_cursor()
             self.executemany(c, q, self.bbulk)  # c.executemany(q, self.bbulk)
 
+    def storeBoardFeatures(self, id, feature_rows, doinsert) -> None:
+        """Queue the classified board rows of one hand (#295).
+
+        The feature columns sit in the order board_features.BOARD_FEATURE_COLUMNS
+        declares, defaulted so a hand classified before a column existed still
+        inserts a complete row.
+        """
+        for row in feature_rows or ():
+            features = tuple(row.get(column, BOARD_FEATURE_DEFAULTS[column]) for column in BOARD_FEATURE_COLUMNS)
+            self.bfbulk.append([id, *features])
+        if doinsert and self.bfbulk:
+            q = self.sql.query["store_board_features"]
+            q = q.replace("%s", self.sql.query["placeholder"])
+            c = self.get_cursor()
+            self.executemany(c, q, self.bfbulk)
+
     def storeHandsPlayers(self, hid, pids, pdata, doinsert=False, printdata=False) -> None:
         log.info(
             f"Entering storeHandsPlayers: hid={hid}, doinsert={doinsert}, printdata={printdata}",
@@ -547,20 +570,27 @@ class DatabaseBulkImportMixin:
         #    pp.pprint(adata)
 
         for a in adata:
+            row = adata[a]
+            # The normalized event context, in the order
+            # action_events.ACTION_EVENT_COLUMNS declares it. Defaulted so a
+            # caller that only fills the original columns (an older producer, a
+            # hand built by hand in a test) still inserts a complete row.
+            event = tuple(row.get(column, ACTION_EVENT_DEFAULTS[column]) for column in ACTION_EVENT_COLUMNS)
             self.habulk.append(
                 (
                     hid,
-                    pids[adata[a]["player"]],
-                    adata[a]["street"],
-                    adata[a]["actionNo"],
-                    adata[a]["streetActionNo"],
-                    adata[a]["actionId"],
-                    adata[a]["amount"],
-                    adata[a]["raiseTo"],
-                    adata[a]["amountCalled"],
-                    adata[a]["numDiscarded"],
-                    adata[a]["cardsDiscarded"],
-                    adata[a]["allIn"],
+                    pids[row["player"]],
+                    row["street"],
+                    row["actionNo"],
+                    row["streetActionNo"],
+                    row["actionId"],
+                    row["amount"],
+                    row["raiseTo"],
+                    row["amountCalled"],
+                    row["numDiscarded"],
+                    row["cardsDiscarded"],
+                    row["allIn"],
+                    *event,
                 ),
             )
 
@@ -586,6 +616,50 @@ class DatabaseBulkImportMixin:
             q = q.replace("%s", self.sql.query["placeholder"])
             c = self.get_cursor()
             self.executemany(c, q, self.hsdbulk)
+
+    def storeHandsSituations(self, hid, pids, situations, doinsert=False) -> None:
+        """Queue the named decisions of one hand (#294, persisted since #305).
+
+        The column order is situation_store.HANDS_SITUATION_COLUMNS behind the
+        hand and player ids, and test_analytics_lifecycle guards the writer,
+        the store query and the DDL against drift.
+        """
+        from fpdb_3_legacy import analytics_lifecycle
+        from fpdb_3_legacy.situation_store import bulk_rows
+
+        self.hsb2bulk += bulk_rows(
+            hid,
+            pids,
+            list(situations or ()),
+            analytics_lifecycle.EXTRACTOR_VERSIONS["situations"],
+        )
+        if doinsert and self.hsb2bulk:
+            q = self.sql.query["store_hands_situations"]
+            q = q.replace("%s", self.sql.query["placeholder"])
+            c = self.get_cursor()
+            self.executemany(c, q, self.hsb2bulk)
+
+    def storeHandStates(self, hid, pids, states, doinsert=False) -> None:
+        """Queue the classified decisions of one hand (#302).
+
+        The column order is hand_state_store.HAND_STATE_COLUMNS behind the hand
+        and player ids, and tests/test_hand_state guards the writer, the store
+        query and the DDL against drift.
+        """
+        from fpdb_3_legacy import analytics_lifecycle
+        from fpdb_3_legacy.hand_state_store import bulk_rows
+
+        self.hstbulk += bulk_rows(
+            hid,
+            pids,
+            list(states or ()),
+            analytics_lifecycle.EXTRACTOR_VERSIONS["hand_strength"],
+        )
+        if doinsert and self.hstbulk:
+            q = self.sql.query["store_hand_states"]
+            q = q.replace("%s", self.sql.query["placeholder"])
+            c = self.get_cursor()
+            self.executemany(c, q, self.hstbulk)
 
     def storeHandsCashout(self, sdata, doinsert) -> None:
         """Persist per-player cashout amounts/fees."""

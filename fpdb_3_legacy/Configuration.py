@@ -60,7 +60,7 @@ from fpdb_3_legacy.loggingFpdb import get_logger
 # config version is used to flag a warning at runtime if the users config is
 #  out of date.
 # Increment with shipped template changes; add an explicit migration when needed.
-CONFIG_VERSION = 84
+CONFIG_VERSION = 86
 SOURCE_DIR = Path(__file__).resolve().parent
 SOURCE_ROOT_PATH = SOURCE_DIR.parent
 
@@ -408,6 +408,50 @@ def string_to_bool(string, default=True):
     return default
 
 
+#: A saved layout's width/height is the size of the table window the positions
+#: were captured on, so every position must sit inside it (a block parked just
+#: off the table edge overhangs a little, hence the tolerance). A reference much
+#: smaller than the positions it frames is not a layout, it is a corrupted one:
+#: Aux_Base.create_scale_position() scales by table/reference, so a 336x103
+#: reference framing a position at (1225, 737) throws the HUD blocks thousands
+#: of pixels off a real table and the user sees no HUD at all.
+LAYOUT_REFERENCE_TOLERANCE = 1.5
+
+#: How far a position may sit *before* the table's origin, as a fraction of the
+#: reference. A block parked just above or left of the table is a real user
+#: choice (the shipped layouts contain x="-4"), so the allowance mirrors the
+#: overhang the tolerance above grants on the right and bottom.
+LAYOUT_REFERENCE_UNDERHANG = LAYOUT_REFERENCE_TOLERANCE - 1.0
+
+
+def layout_reference_fits(width, height, positions) -> bool:
+    """Whether ``width``x``height`` can plausibly be the reference for ``positions``.
+
+    ``positions`` is any iterable of (x, y). Missing or non-positive dimensions
+    are rejected outright: they would make the scale factor meaningless (or
+    raise) rather than merely wrong.
+
+    Both directions are checked. Looking only at the maxima accepted a layout
+    whose blocks all sit far above and left of the table -- (-5000, -5000) is as
+    unusable as (5000, 5000), and the corrupt ipoker layout this guard was
+    written for carried y="-395" alongside its oversized x.
+    """
+    points = [p for p in positions if p is not None]
+    if not width or not height or int(width) <= 0 or int(height) <= 0:
+        return False
+    if not points:
+        return True
+    width, height = int(width), int(height)
+    xs = [int(x) for x, _y in points]
+    ys = [int(y) for _x, y in points]
+    return (
+        max(xs) <= width * LAYOUT_REFERENCE_TOLERANCE
+        and max(ys) <= height * LAYOUT_REFERENCE_TOLERANCE
+        and min(xs) >= -width * LAYOUT_REFERENCE_UNDERHANG
+        and min(ys) >= -height * LAYOUT_REFERENCE_UNDERHANG
+    )
+
+
 class Layout:
     def __init__(self, node) -> None:
         self.max = int(node.getAttribute("max"))
@@ -442,6 +486,74 @@ class Layout:
                     int(location_node.getAttribute("x")),
                     int(location_node.getAttribute("y")),
                 )
+
+        self._repair_reference_size()
+
+    def _repair_reference_size(self) -> None:
+        """Widen a reference size that cannot possibly frame this layout's positions.
+
+        Configs in the wild carry layouts whose width/height were saved from the
+        wrong window (a stray HUD label, a rolled-up client), leaving positions
+        several times larger than the frame they are scaled against. Loading such
+        a layout as-is multiplies every block position by table/reference and
+        scatters the HUD far off the table, which reads as "no HUD". Growing the
+        reference to the bounding box keeps the user's own positions and puts
+        them back inside the table window; the layout is not the intended one,
+        but it is visible and can be dragged and re-saved.
+        """
+        positions = [p for p in self.location if p is not None]
+        if getattr(self, "common", None) is not None:
+            positions.append(self.common)
+        if layout_reference_fits(self.width, self.height, positions):
+            return
+        old_width, old_height = self.width, self.height
+        if positions:
+            # At least 1: a zero reference whose coordinates are all zero or
+            # negative would otherwise survive the widening unchanged, and
+            # Aux_Base.create_scale_position() refuses to divide by it -- the HUD
+            # would be no more available than before the repair.
+            self.width = max(1, self.width, max(x for x, _y in positions))
+            self.height = max(1, self.height, max(y for _x, y in positions))
+        # Growing the reference cannot rescue a position that sits *before* the
+        # table's origin: scaling only pushes it further off. Such a block is
+        # lifted back to the edge instead, which is the same bargain the widening
+        # makes -- not the layout the user drew, but one they can see and re-drag.
+        lifted = self._lift_positions_into_view()
+        log.warning(
+            "Layout %d-max declares a %dx%d reference that cannot contain its own positions; "
+            "using %dx%d instead%s so the HUD stays on the table",
+            self.max,
+            old_width,
+            old_height,
+            self.width,
+            self.height,
+            f" and lifting {lifted} block(s) back onto it" if lifted else "",
+        )
+
+    def _lift_positions_into_view(self) -> int:
+        """Clamp positions that sit far before the table origin; return how many."""
+        floor_x = -int(self.width * LAYOUT_REFERENCE_UNDERHANG)
+        floor_y = -int(self.height * LAYOUT_REFERENCE_UNDERHANG)
+
+        def lift(point):
+            x, y = point
+            return (max(x, floor_x), max(y, floor_y))
+
+        lifted = 0
+        for seat, point in enumerate(self.location):
+            if point is None:
+                continue
+            raised = lift(point)
+            if raised != point:
+                self.location[seat] = raised
+                lifted += 1
+        common = getattr(self, "common", None)
+        if common is not None:
+            raised = lift(common)
+            if raised != common:
+                self.common = raised
+                lifted += 1
+        return lifted
 
     def __str__(self) -> str:
         if hasattr(self, "name"):
@@ -617,6 +729,7 @@ class Stat:
         self.rowcol = tuple(int(s) - 1 for s in rowcol[1:-1].split(","))  # tuple (r-1,c-1)
         self.stat_name = node.getAttribute("_stat_name")
         self.tip = node.getAttribute("tip")
+        self.display_label = node.getAttribute("display_label")
         self.click = node.getAttribute("click")
         self.popup = node.getAttribute("popup")
         self.hudprefix = node.getAttribute("hudprefix")
@@ -632,6 +745,15 @@ class Stat:
         cs = node.getAttribute("colspan")
         self.colspan = int(cs) if cs else 1
         self.align = node.getAttribute("align") or "center"
+        # Declarative source of the stat, when the editor bound an
+        # analytics-backed definition to this cell (#309). Absent for every
+        # column-backed stat of Stats.py, which is nearly all of them; kept here
+        # so the binding survives a load/save round-trip instead of being
+        # rewritten into an anonymous name.
+        self.data_source = node.getAttribute("data_source")
+        self.data_definition = node.getAttribute("data_definition")
+        self.data_format = node.getAttribute("data_format")
+        self.data_min_sample = node.getAttribute("data_min_sample")
 
     def __str__(self) -> str:
         temp = f"        _rowcol = {self.rowcol}, _stat_name = {self.stat_name}, \n"
@@ -685,6 +807,8 @@ class StatBlock:
             self.bordercolor = node.getAttribute("bordercolor")
             self.title_bgcolor = node.getAttribute("title_bgcolor")
             self.title_fgcolor = node.getAttribute("title_fgcolor")
+            self.title_font_scale = float(node.getAttribute("title_font_scale")) if node.getAttribute("title_font_scale") else 0
+            self.heading_font_scale = float(node.getAttribute("heading_font_scale")) if node.getAttribute("heading_font_scale") else 0
             self.cell_width = int(node.getAttribute("cell_width")) if node.getAttribute("cell_width") else 0
             self.x = int(node.getAttribute("x")) if node.getAttribute("x") else 0
             self.y = int(node.getAttribute("y")) if node.getAttribute("y") else 0
@@ -710,6 +834,8 @@ class StatBlock:
             self.bordercolor = style.get("bordercolor", "")
             self.title_bgcolor = style.get("title_bgcolor", "")
             self.title_fgcolor = style.get("title_fgcolor", "")
+            self.title_font_scale = float(style.get("title_font_scale", 0) or 0)
+            self.heading_font_scale = float(style.get("heading_font_scale", 0) or 0)
             self.cell_width = int(style.get("cell_width", 0) or 0)
             self.x = int(style.get("x", 0) or 0)
             self.y = int(style.get("y", 0) or 0)
@@ -802,6 +928,8 @@ class Stat_sets:
         # Optional profile-specific font size. An empty value keeps the global
         # HUD font setting, while a profile can opt into a larger compact grid.
         self.font_size = node.getAttribute("font_size")
+        self.title_font_scale = node.getAttribute("title_font_scale")
+        self.heading_font_scale = node.getAttribute("heading_font_scale")
         # How position-bound panels (SB/BB/BU) display in a multi-block HUD:
         #   "current" -> show only the panel matching the estimated live position
         #                (the positional HUD's expected behaviour and default);
@@ -1535,6 +1663,54 @@ def parse_hud_profile_rules(doc: Any) -> list[HudProfileRule]:
     return rules
 
 
+def parse_hud_panel_rules(doc: Any) -> tuple[list[Any], str, bool]:
+    """Read the <hud_panel_rules> section of a configuration document (#298).
+
+    Returns ``(rules, fallback_panel, enabled)``. The section is optional and
+    absent by default, which is what keeps a static HUD static: no rules means
+    the HUD behaves exactly as it always has. ``source="builtin"`` prepends the
+    shipped rule library, so enabling dynamic panels is one attribute rather
+    than a copy of nineteen rules into the user's configuration.
+
+    A section-level ``profile`` scopes that library to one HUD profile, which
+    is how the Dynamic reference HUD (#332) turns the panels on for its own
+    profile without changing what every other profile does: a table using
+    another profile resolves no rules and keeps its static grid.
+
+    Shared by the initial load and by ``Config.reload()``, for the same reason
+    the profile rules are: a change the user has just saved has to reach the
+    running HUD.
+    """
+    from fpdb_3_legacy import hud_situation
+
+    sections = doc.getElementsByTagName("hud_panel_rules")
+    if not sections:
+        return [], "", False
+    rules: list[Any] = []
+    fallback = ""
+    enabled = False
+    for section in sections:
+        section_enabled = str(section.getAttribute("enabled") or "true").strip().lower() not in ("false", "no", "0", "off")
+        if not section_enabled:
+            continue
+        enabled = True
+        fallback = fallback or str(section.getAttribute("fallback") or "").strip()
+        section_rules: list[Any] = []
+        source = str(section.getAttribute("source") or "").strip()
+        if source:
+            loaded, loaded_fallback = hud_situation.load_source(source)
+            section_rules.extend(loaded)
+            fallback = fallback or loaded_fallback
+        for node in section.getElementsByTagName("hud_panel_rule"):
+            values = {name: node.getAttribute(name) for name in node.attributes.keys()}
+            section_rules.append(hud_situation.panel_rule_from_attributes(values, len(rules) + len(section_rules)))
+        scope = str(section.getAttribute("profile") or "").strip()
+        if scope and scope.casefold() != "all":
+            section_rules = hud_situation.scope_rules(section_rules, scope)
+        rules.extend(section_rules)
+    return hud_situation.number_rules(rules), fallback, enabled
+
+
 class Config:
     def __init__(
         self,
@@ -1596,6 +1772,12 @@ class Config:
         self.hhcs: dict[str, Any] = {}
         self.popup_windows: dict[str, Any] = {}
         self.hud_profile_rules: list[HudProfileRule] = []
+        # Context-aware dynamic HUD panels (#298). Empty and disabled by
+        # default: the static grid is what a configuration without a
+        # <hud_panel_rules> section gets, and that is the shipped default.
+        self.hud_panel_rules: list[Any] = []
+        self.hud_panel_fallback: str = ""
+        self.hud_panel_rules_enabled: bool = False
         self.db_selected = None  # database the user would like to use
         self.general = General()
         self.emails: dict[str, Any] = {}
@@ -1733,6 +1915,7 @@ class Config:
             self.stat_sets[ss.name] = ss
 
         self.hud_profile_rules = parse_hud_profile_rules(doc)
+        self.hud_panel_rules, self.hud_panel_fallback, self.hud_panel_rules_enabled = parse_hud_panel_rules(doc)
 
         #     s_dbs = doc.getElementsByTagName("mucked_windows")
         for hhc_node in doc.getElementsByTagName("hhc"):
@@ -1747,6 +1930,11 @@ class Config:
         for pu_node in doc.getElementsByTagName("pu"):
             pu = Popup(node=pu_node)
             self.popup_windows[pu.name] = pu
+
+        # The shipped popup packs (#299) are additive: they never replace a
+        # popup this file defines, so a broken pack library cannot leave the
+        # user without a popup.
+        self.install_popup_packs()
 
         for imp_node in doc.getElementsByTagName("import"):
             imp = Import(node=imp_node)
@@ -2255,6 +2443,9 @@ class Config:
             # Profile selection rules
             hud_profile_rules = parse_hud_profile_rules(doc)
 
+            # Context-aware dynamic panel rules (#298)
+            hud_panel_rules, hud_panel_fallback, hud_panel_rules_enabled = parse_hud_panel_rules(doc)
+
             # HHCs (disabled rooms keep no converter binding -- see the
             # matching skip in the initial load)
             for hhc_node in doc.getElementsByTagName("hhc"):
@@ -2296,8 +2487,15 @@ class Config:
         self.layout_sets = layout_sets
         self.stat_sets = stat_sets
         self.hud_profile_rules = hud_profile_rules
+        self.hud_panel_rules = hud_panel_rules
+        self.hud_panel_fallback = hud_panel_fallback
+        self.hud_panel_rules_enabled = hud_panel_rules_enabled
         self.hhcs = hhcs
         self.popup_windows = popup_windows
+        # The packs are re-installed onto the freshly parsed registry, so a
+        # reload is not a way to lose them.
+        self.pack_popups: dict[str, str] = {}
+        self.install_popup_packs()
         if imp is not None:
             self.imp = imp
         if ui is not None:
@@ -2507,6 +2705,25 @@ class Config:
             self.supported_sites[site_name].screen_name = primary
             self.supported_sites[site_name].hero_aliases = ordered
 
+    def install_popup_packs(self) -> None:
+        """Merge the packaged popup packs (#299) into the popup registry.
+
+        Best-effort: a pack library that fails to load is logged and the popups
+        the configuration file defines are left in place, so the HUD always has
+        the classic popups even when the packs are broken.
+        """
+        try:
+            from fpdb_3_legacy import popup_packs
+
+            registry = popup_packs.load_default_registry()
+            report = popup_packs.install_packs(self, [registry.packs[name] for name in registry.names()])
+        except Exception:  # intentional broad catch: a broken pack must not break the HUD
+            log.exception("popup packs could not be installed")
+            return
+        for warning in report.warnings:
+            log.debug("popup pack: %s", warning)
+        log.info("popup packs: %s", report.summary())
+
     def is_hero_name(self, site_name, name) -> bool:
         """True if ``name`` is one of the hero aliases configured for a site."""
         if not name:
@@ -2673,6 +2890,36 @@ class Config:
         # wid/height normally not specified when saving common from the mucked display
 
         log.debug(f"saving layout = {ls.name} {max}Max {locations} size: {width}x{height}")
+        # A dimension that is present is a measurement; only None means "not
+        # specified", which is how the mucked display saves its common position.
+        # The difference matters because a minimized, rolled-up or not yet
+        # realized window measures exactly 0, and the truthiness test this used
+        # to be read that as "not specified": the guard was skipped, the
+        # positions were written, and `if width:` below left the previous
+        # width/height on the node for them to be scaled against -- the
+        # mismatched reference this guard exists to prevent, reached through the
+        # one path that bypassed it.
+        measured = [value for value in (width, height) if value is not None]
+        broken_measurement = any(int(value) <= 0 for value in measured)
+        # A pair can be checked against the positions it is supposed to frame;
+        # a single dimension cannot (the other one stays whatever the node
+        # already held), so it is only checked for being a real measurement.
+        pair_does_not_fit = len(measured) == 2 and not layout_reference_fits(width, height, locations.values())
+        if broken_measurement or pair_does_not_fit:
+            # The reference is the table the positions were just read from, so
+            # positions far outside it mean the HUD was measuring the wrong
+            # window (a stray label, a rolled-up client). Persisting that pair
+            # is what corrupts a layout set permanently: on the next real table
+            # the blocks get scaled by table/reference and land off-screen.
+            log.error(
+                "Refusing to save layout %s %d-max: positions %s cannot come from a %sx%s table",
+                ls.name,
+                max,
+                locations,
+                width,
+                height,
+            )
+            return
         ls_node = self.get_layout_set_node(ls.name)
         layout_node = self.get_layout_node(ls_node, max)
         if width:
@@ -3760,6 +4007,45 @@ class Config:
             if lang:
                 general_node.setAttribute("ui_language", lang)
 
+    def set_preflop_advisor_path(self, path: str | None) -> None:
+        """Remember where PreflopAdvisor is, for the solver review (#413); empty forgets it.
+
+        An optional ``preflop_advisor`` attribute on ``<general>``: the shipped templates do
+        not carry it, so files without it keep looking for PreflopAdvisor on the PATH.
+        """
+        value = str(path or "")
+        if value:
+            self.general["preflop_advisor"] = value
+        else:
+            self.general.pop("preflop_advisor", None)
+        for general_node in self.doc.getElementsByTagName("general"):
+            if value:
+                general_node.setAttribute("preflop_advisor", value)
+            elif general_node.hasAttribute("preflop_advisor"):
+                general_node.removeAttribute("preflop_advisor")
+        self.save()
+
+    def get_session_guard_defaults(self) -> dict[str, str]:
+        """The Session Guard limits saved as defaults (#395), as stored; empty when none."""
+        for node in self.doc.getElementsByTagName("session_guard"):
+            return dict(node.attributes.items())
+        return {}
+
+    def set_session_guard_defaults(self, limits: dict[str, Any] | None) -> None:
+        """Save Session Guard limits as defaults, or forget them (``None`` or empty).
+
+        An optional ``<session_guard>`` element of the root: the shipped templates do not
+        carry it, so a configuration without one simply has no defaults.
+        """
+        for node in list(self.doc.getElementsByTagName("session_guard")):
+            node.parentNode.removeChild(node)
+        if limits:
+            node = self.doc.createElement("session_guard")
+            for name, value in sorted(limits.items()):
+                node.setAttribute(name, str(value))
+            self.doc.documentElement.appendChild(node)
+        self.save()
+
     def set_site_ids(self, sites) -> None:
         self.site_ids = dict(sites)
 
@@ -3971,6 +4257,69 @@ class Config:
     def get_hud_profile_rules(self) -> list[HudProfileRule]:
         """Return a copy of the persistent PT-style profile selection rules."""
         return list(self.hud_profile_rules)
+
+    def get_hud_panel_rules(self) -> list[Any]:
+        """The dynamic panel rules (#298), or ``[]`` when they are disabled.
+
+        An empty list is what the HUD reads as "keep the static grid", so the
+        disabled case and the unconfigured case are the same code path: turning
+        dynamic panels off cannot change what a table draws.
+        """
+        if not self.hud_panel_rules_enabled:
+            return []
+        return list(self.hud_panel_rules)
+
+    def set_hud_panel_rules(
+        self,
+        rules: list[Any],
+        *,
+        fallback: str = "",
+        enabled: bool = True,
+    ) -> None:
+        """Replace the dynamic panel rules in memory and in the DOM.
+
+        Each rule is validated on the way in by being rebuilt from its own XML
+        attributes, so what is written is what a reload can read back.
+        """
+        from fpdb_3_legacy import hud_situation
+
+        self.hud_panel_rules = hud_situation.number_rules(
+            hud_situation.panel_rule_from_attributes(rule.as_xml_attributes(), order)
+            for order, rule in enumerate(rules)
+        )
+        self.hud_panel_fallback = str(fallback or "")
+        self.hud_panel_rules_enabled = bool(enabled)
+        if self.doc is None:
+            return
+
+        sections = self.doc.getElementsByTagName("hud_panel_rules")
+        if sections:
+            section = sections[0]
+            section.setAttribute("enabled", "true" if enabled else "false")
+            section.setAttribute("fallback", self.hud_panel_fallback)
+            # These rules are already materialized; retaining the source would
+            # make reload append the source rules again.
+            if section.hasAttribute("source"):
+                section.removeAttribute("source")
+            while section.firstChild:
+                section.removeChild(section.firstChild)
+            for duplicate in list(sections)[1:]:
+                duplicate.parentNode.removeChild(duplicate)
+        else:
+            section = self.doc.createElement("hud_panel_rules")
+            section.setAttribute("enabled", "true" if enabled else "false")
+            section.setAttribute("fallback", self.hud_panel_fallback)
+            self.doc.documentElement.appendChild(self.doc.createTextNode("\n    "))
+            self.doc.documentElement.appendChild(section)
+
+        for rule in self.hud_panel_rules:
+            section.appendChild(self.doc.createTextNode("\n        "))
+            node = self.doc.createElement("hud_panel_rule")
+            for name, value in rule.as_xml_attributes().items():
+                node.setAttribute(name, value)
+            section.appendChild(node)
+        if self.hud_panel_rules:
+            section.appendChild(self.doc.createTextNode("\n    "))
 
     def set_hud_profile_rules(self, rules: list[HudProfileRule]) -> None:
         """Replace profile rules in memory and in the configuration DOM."""

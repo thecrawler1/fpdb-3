@@ -107,6 +107,12 @@ def menu_layout() -> tuple[Menu, ...]:
                     "dia_import_pt4stat",
                     tip=N_("Import PokerTracker 4 custom statistics as declarative stat descriptors"),
                 ),
+                MenuItem(
+                    N_("Stat Packs"),
+                    "dia_stat_packs",
+                    tip=N_("Import, enable, disable, uninstall and export declarative stat packs"),
+                    separator_before=True,
+                ),
             ),
         ),
         Menu(
@@ -129,6 +135,8 @@ def menu_layout() -> tuple[Menu, ...]:
                 MenuItem(N_("Graphs"), "tabGraphViewer", "Ctrl+G"),
                 MenuItem(N_("Ring Player Stats"), "tab_ring_player_stats", "Ctrl+P"),
                 MenuItem(N_("Opponents Report"), "tab_opponents_report", "Ctrl+O"),
+                MenuItem(N_("Study Explorer"), "tab_study_explorer"),
+                MenuItem(N_("Research Browser"), "tab_research_browser"),
                 MenuItem(N_("Hand Viewer"), "tab_hand_viewer"),
                 MenuItem(N_("Session Stats"), "tab_session_stats", "Ctrl+S"),
             ),
@@ -149,6 +157,11 @@ def menu_layout() -> tuple[Menu, ...]:
                 MenuItem(N_("Rebuild HUD Cache"), "dia_recreate_hudcache"),
                 MenuItem(N_("Rebuild DB Indexes"), "dia_rebuild_indexes"),
                 MenuItem(
+                    N_("Rebuild Analytics Data"),
+                    "dia_rebuild_analytics",
+                    tip=N_("Re-derive the situations and hand states the Research Browser and HUD read"),
+                ),
+                MenuItem(
                     N_("Dump Database to Textfile"),
                     "dia_dump_db",
                     tip=N_("Export the whole database to a text file (slow)"),
@@ -160,6 +173,11 @@ def menu_layout() -> tuple[Menu, ...]:
             N_("Tools"),
             (
                 MenuItem(N_("Auto Notes Workbench"), "tab_auto_notes_workbench"),
+                MenuItem(
+                    N_("Session Guard"),
+                    "dia_session_guard",
+                    tip=N_("Alerts for the session being played: loss, win, duration, hands, drawdown"),
+                ),
                 MenuItem(N_("Launch SwC HTTP Capture"), "launch_swc_capture"),
                 MenuItem(
                     N_("Logger Dev Tool"),
@@ -186,6 +204,11 @@ def menu_layout() -> tuple[Menu, ...]:
                     tip=N_("Version, packaging and runtime environment details"),
                 ),
                 MenuItem(N_("Stats Guide"), "tabStatsInfo"),
+                MenuItem(
+                    N_("Research Browser for Omaha"),
+                    "help_research_omaha",
+                    tip=N_("What every filter is for in a four-card game, and the two that are not"),
+                ),
                 MenuItem(N_("Log Messages"), "dia_logs", tip=N_("Log and debug messages")),
                 MenuItem(N_("About"), "dia_about", tip=N_("About the program"), separator_before=True),
             ),

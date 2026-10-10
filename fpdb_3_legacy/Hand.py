@@ -477,6 +477,7 @@ class Hand:
         self.hands["fileId"] = fileId
         db.storeHand(self.hands, doinsert, printtest)
         db.storeBoards(self.dbid_hands, self.hands["boards"], doinsert)
+        db.storeBoardFeatures(self.dbid_hands, self.hands["boardfeatures"], doinsert)
 
     def insertHandsPlayers(self, db, doinsert=False, printtest=False) -> None:
         log.info(
@@ -542,6 +543,26 @@ class Hand:
             for hs in self.handsstove:
                 hs[0] = self.dbid_hands
         db.storeHandsStove(self.handsstove, doinsert)
+
+    def insertHandsSituations(self, db, doinsert=False) -> None:
+        """Persist the named decisions of this hand (#294, stored since #305)."""
+        if self.saveActions:
+            db.storeHandsSituations(
+                self.dbid_hands,
+                self.playerIds,
+                self.stats.getSituations(),
+                doinsert,
+            )
+
+    def insertHandStates(self, db, doinsert=False) -> None:
+        """Persist what each postflop decision was holding (#302)."""
+        if self.saveActions:
+            db.storeHandStates(
+                self.dbid_hands,
+                self.playerIds,
+                self.stats.getHandStates(),
+                doinsert,
+            )
 
     def insertHandsShowdown(self, db, doinsert=False) -> None:
         """Persist parsed showdown combinations (and winning cards) per player.

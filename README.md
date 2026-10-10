@@ -21,6 +21,144 @@ The original FPDB-3 Python application: hand-history parsers, PySide6 GUI, stati
 - **PySide6 Desktop GUI**: The graphical interface has been completely ported to PySide6.
 - **Self-Contained Platform Detection**: Window detection and geometry calculations are fully integrated for Linux, macOS, and Windows.
 
+## 🔎 Advanced Poker Analytics
+
+Beyond the classic reports, fpdb-3 answers poker questions about your own
+database — without writing SQL, and without having to know which statistic to
+ask for.
+
+### Start from the spot
+
+**Choose a spot → compare with the field → look at the picture → open the
+hands.**
+
+The **Study Explorer** names poker situations, not metrics. Pick the one you
+want to work on and fpdb runs the seven or eight readings of it that are worth
+having, all over the same population.
+
+![The Study Explorer landing page](docs/images/study-explorer-landing.png)
+
+**Don't know which spot?** *Biggest Differences vs Field* compares every
+curated study panel and ranks the spots where your frequencies differ most from
+the people you actually play. It is a review queue, not a verdict — see
+[Reading differences responsibly](docs/reading-differences.md).
+
+![Biggest Differences vs Field](docs/images/study-differences.png)
+
+**Compare.** Every study opens in Hero vs Field: each panel answers once over
+your decisions and once over everyone else's, from the same query with the
+population identity flipped, with the gap and both samples beside it.
+
+![A single-raised-pot study overview](docs/images/study-srp-overview.png)
+
+**Visualize.** Sizing distributions, position matrices, board-texture heatmaps,
+the 13×13 range grid, hand-strength composition, realized and EV-adjusted
+profit — each a tab of the same study. Clicking a bar, a cell or a texture adds
+a visible, removable cross-filter that narrows every panel and both sides at
+once.
+
+![A board texture heatmap](docs/images/study-board-heatmap.png)
+
+**Inspect the hands.** Under every panel, the hands behind the number, with
+your population, your actions, the field's population and the field's actions
+kept apart rather than merged into one ambiguous list. Double-click one to open
+the replayer.
+
+![The source hands pane](docs/images/study-source-hands.png)
+
+Shipped study packs: **No-limit Hold'em 6-max**, **Pot-Limit Omaha 6-max** and
+**tournaments** (organised around effective stack depth rather than treating a
+tournament hand as a cash hand with one more filter).
+
+→ [Study Explorer quick start](docs/study-explorer-quick-start.md) — the whole
+workflow in five minutes, on invented data.
+
+### Custom / Advanced Research
+
+When no study asks your question, the **Research Browser** is the power-user
+path: one screen for building a query in poker words, reading the answer and
+inspecting the hands behind it.
+
+![The Research Browser answering a grouped question](docs/images/research-table.png)
+
+**Ask in poker words.** *Population* (who), *situation* (the spot), *metric*
+(how often / how much) and *breakdown* (how it is split) are selected from poker
+labels, and a plain-language sentence restates the query before it runs. A
+**beginner** view offers the common controls; **expert** reveals the rest.
+
+**A built-in library of 40+ presets** covers what players actually ask:
+
+- **Preflop** — RFI, VPIP and PFR by position, 3-bet and 4-bet rates, blind
+  defence versus a button open, squeeze opportunities, open and 3-bet sizing.
+- **Postflop** — c-bet frequency and size, fold-versus-c-bet by size, delayed
+  c-bets, turn probes, barrels, river overbets, check-raises.
+- **Pot type** — c-betting and defence in 3-bet pots, aggression in 4-bet pots,
+  first bet in a limped pot.
+- **Board** — how suit structure, pairing and connectivity change the c-bet rate.
+- **Range** — the 13×13 grid of what hero and opponents actually hold, and the
+  **postflop hand-strength composition** (air / pair / set / draw) behind a bet.
+- **Population** — the pool's baseline, so your numbers have something to sit
+  beside.
+- **Profit** — **realized profit** and the separate **EV-adjusted (all-in EV)**
+  result, per decision and by pot type.
+
+![The 13x13 range grid](docs/images/research-range.png)
+
+**A workbench, not one table.** Summary, Table, Frequencies, Sizing, Position,
+Board, Range, Hand Strength, Profit and Hands are tabs of one screen; every view
+keeps the denominator and numerator beside the value and names its sample size.
+Double-clicking a hand opens it in the replayer.
+
+### Reference HUDs
+
+Three `.fpdbhud` packages ship ready to import (**Preferences → HUD → Import**):
+
+- **Basic** — the eight numbers that answer "who am I playing against".
+- **Advanced** — the same small grid over fpdb's hierarchical popups: preflop,
+  single-raised pot, 3-bet pot, 4-bet pot, one click deep.
+- **Dynamic** — context-aware panels that change with the situation: preflop,
+  facing a c-bet, 3-bet pots, short stacks, sizing thresholds. Its rules are
+  scoped to the Dynamic profile, so other profiles keep their current layout.
+  Panel titles and compact stat headings are editable in the `.fpdbhud` package.
+
+![A compact dynamic HUD panel for a single-raised pot](docs/images/reference-huds/dynamic-srp-cbet-ip.png)
+
+For multi-tabling, set `display_label` on a `<stat>` to use a short visible
+heading while retaining the longer `tip` as its explanation. The profile's
+`title_font_scale` and `heading_font_scale` control title and heading sizes. See
+the [Advanced HUD guide](docs/hud-advanced-guide.md#tune-dynamic-panel-labels-in-a-package)
+for the XML example and editing notes.
+
+![The dynamic panel rule editor and its preview](docs/images/hud-preferences-dynamic-panels.png)
+
+### Documentation
+
+User guides (task-first, poker vocabulary) and the developer references beside
+them:
+
+| Guide | For |
+| --- | --- |
+| [Study Explorer quick start](docs/study-explorer-quick-start.md) | spot → compare → visualize → hands, in five minutes |
+| [Reading differences responsibly](docs/reading-differences.md) | what a Hero-vs-Field gap is, and is not |
+| [Reading the visualizations](docs/study-visualizations.md) | sizing, matrices, heatmaps, range grid, strength, EV |
+| [Research for Omaha](docs/research-omaha.md) | the PLO study pack and what four cards change |
+| [Research for tournaments](docs/research-tournaments.md) | the MTT pack, stack-depth bands, what fpdb cannot know |
+| [Research Browser in five minutes](docs/research-quick-start.md) | the power-user path: building a query by hand |
+| [Analytics concepts](docs/analytics-concepts.md) | opportunity, sample, SPR, pot type, realized vs EV |
+| [Advanced HUD guide](docs/hud-advanced-guide.md) | the reference packages and popups |
+| [Dynamic HUD guide](docs/hud-dynamic-guide.md) | panels, thresholds, what is truly live |
+| [Reference HUD design system](docs/hud-design-system.md) | what each colour means, samples, panel titles |
+| [Screenshots](docs/screenshots.md) | what each picture shows and how to regenerate it |
+| [research-browser.md](docs/research-browser.md), [query-engine.md](docs/query-engine.md), [dynamic-panels.md](docs/dynamic-panels.md), [stat-definitions.md](docs/stat-definitions.md) | implementation reference |
+
+Every screenshot above is generated from a **deterministic demo workspace** of
+invented players — no private hand history is ever needed:
+
+```sh
+python tools/make_demo_workspace.py
+python tools/capture_wiki_screenshots.py --config ~/fpdb-demo/HUD_config.xml --out docs/images
+```
+
 ## 📦 Prebuilt downloads
 
 Standalone builds for macOS (Apple Silicon), Windows x64 and Linux x64 are attached to every
