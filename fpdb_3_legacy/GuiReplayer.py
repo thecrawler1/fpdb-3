@@ -52,7 +52,7 @@ from fpdb_3_legacy.localized_formats import format_currency, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.replayer_audio import ReplayerAudio, transition_sound
 from fpdb_3_legacy.replayer_controls import ReplayControlButton
-from fpdb_3_legacy.replayer_style import REPLAYER_STYLE
+from fpdb_3_legacy.replayer_style import FONT_SCALE, REPLAYER_STYLE, replay_font
 
 # import L10n
 # _ = L10n.get_translation()
@@ -62,10 +62,11 @@ log = get_logger("gui_replayer")
 
 CARD_HEIGHT = 90
 CARD_WIDTH = 70
-PLAYER_PANEL_WIDTH = 184
-PLAYER_PANEL_HEIGHT = 50
+PLAYER_PANEL_WIDTH = 244
+PLAYER_PANEL_HEIGHT = 75
 CONTROL_RESERVED_HEIGHT = 148
-HEADER_HEIGHT = 104
+HEADER_HEIGHT = 144
+CARD_REFERENCE_RESERVED_HEIGHT = 252  # Original header and control reservation.
 TIMELINE_WIDTH = 280
 TIMELINE_MIN_WINDOW_WIDTH = 1500
 TABLE_MARGIN = 28
@@ -608,7 +609,9 @@ def build_replay_layout(
     table_y = HEADER_HEIGHT + (table_area_height - table_height) / 2
     table_rect = QRectF(table_x, table_y, table_width, table_height)
 
-    card_scale = max(MIN_CARD_SCALE, min(1.0, table_width / 880, table_area_height / 520))
+    reference_height = max(300, height - CARD_REFERENCE_RESERVED_HEIGHT - TABLE_MARGIN)
+    reference_width = max(420, min(table_area_width * .72, reference_height * 1.62))
+    card_scale = max(MIN_CARD_SCALE, min(1.0, reference_width / 880, reference_height / 520))
     card_width = int(CARD_WIDTH * card_scale)
     card_height = int(CARD_HEIGHT * card_scale)
     card_spacing = card_width * CARD_SPACING_RATIO
@@ -644,8 +647,8 @@ def build_replay_layout(
     rx = table_rect.width() * 0.56
     ry = table_rect.height() * 0.62
 
-    panel_w = max(130, int(PLAYER_PANEL_WIDTH * card_scale))
-    panel_h = max(38, int(PLAYER_PANEL_HEIGHT * card_scale))
+    panel_w = max(180, int(PLAYER_PANEL_WIDTH * card_scale))
+    panel_h = max(57, int(PLAYER_PANEL_HEIGHT * card_scale))
 
     num_cards = hidden_card_count(category) if category else 4
     num_cards = max(2, num_cards)
@@ -927,8 +930,8 @@ class GuiReplayer(QWidget):
         self.stateSlider.setFixedHeight(16)
         for button in self.findChildren(QPushButton):
             if not isinstance(button, ReplayControlButton):
-                button.setFixedHeight(32)
-        self.deckTypeCombo.setFixedHeight(30)
+                button.setFixedHeight(44)
+        self.deckTypeCombo.setFixedHeight(44)
 
         # Fold animation state: {player_name: start_monotonic_time}
         self._fold_anim: dict[str, Any] = {}
@@ -1019,6 +1022,9 @@ class GuiReplayer(QWidget):
         self._replayer_background_color = "#101216"
         self._replayer_panel_color = "#22262e"
         self.setStyleSheet(REPLAYER_STYLE)
+        for button in self.findChildren(ReplayControlButton):
+            button.ensurePolished()
+            button.setFixedSize(70 if button.property("primary") else 44, 58 if button.property("primary") else 44)
         self.deckLabel.setStyleSheet("color: #a6afbc;")
         self._update_deck_preview()
         self.update()
@@ -1251,14 +1257,14 @@ class GuiReplayer(QWidget):
 
     def _draw_ofc_header(self, painter: QPainter) -> None:
         painter.setPen(QColor("#eef3f7"))
-        painter.setFont(QFont("DejaVu Sans", 11, QFont.Weight.DemiBold))
-        title_width = self.width() - 420
+        painter.setFont(replay_font("DejaVu Sans", 11, QFont.Weight.DemiBold))
+        title_width = max(200, self.width() - self.headerBox.sizeHint().width() - 40)
         title = painter.fontMetrics().elidedText(self.info, Qt.TextElideMode.ElideRight, title_width)
         painter.drawText(QRectF(24, 10, title_width, 26), Qt.AlignmentFlag.AlignLeft, title)
         state = self.states[self.stateSlider.value()] if self.states else None
         label = self._ofc_state_label(state) if state else "Result"
         actor = f"  ·  {state.actor}" if state and state.actor else ""
-        painter.setFont(QFont("DejaVu Sans", 10, QFont.Weight.Medium))
+        painter.setFont(replay_font("DejaVu Sans", 10, QFont.Weight.Medium))
         painter.setPen(QColor("#9aa5ad"))
         painter.drawText(
             QRectF(28, 48, self.width() - 56, 24),
@@ -1297,7 +1303,7 @@ class GuiReplayer(QWidget):
         painter.save()
         painter.setOpacity(0.18)
         painter.setPen(QColor("#dce7ee"))
-        logo_font = QFont("Helvetica", max(22, int(felt_rect.width() * 0.055)), QFont.Weight.Black)
+        logo_font = replay_font("Helvetica", max(22, int(felt_rect.width() * 0.055)), QFont.Weight.Black)
         logo_font.setItalic(True)
         painter.setFont(logo_font)
         painter.drawText(felt_rect, Qt.AlignmentFlag.AlignCenter, "OFC")
@@ -1329,9 +1335,9 @@ class GuiReplayer(QWidget):
         painter.drawRoundedRect(panel, 8, 8)
 
         painter.setPen(QColor("#eef3f7"))
-        painter.setFont(QFont("DejaVu Sans", 10, QFont.Weight.DemiBold))
+        painter.setFont(replay_font("DejaVu Sans", 10, QFont.Weight.DemiBold))
         painter.drawText(panel.adjusted(10, 7, -10, -28), Qt.AlignmentFlag.AlignLeft, player.name)
-        painter.setFont(QFont("Helvetica", 8, QFont.Weight.DemiBold))
+        painter.setFont(replay_font("Helvetica", 8, QFont.Weight.DemiBold))
         painter.setPen(QColor("#9aa5ad"))
         painter.drawText(
             panel.adjusted(10, 26, -10, -6),
@@ -1360,7 +1366,7 @@ class GuiReplayer(QWidget):
         self.render_card_spacing: float = float(card_w + gap)
         for row_index, (row_key, label, limit) in enumerate(row_defs):
             y = board.y() + 10 + row_index * (card_h + 4)
-            painter.setFont(QFont("Helvetica", 8, QFont.Weight.Bold))
+            painter.setFont(replay_font("Helvetica", 8, QFont.Weight.Bold))
             painter.setPen(QColor("#9aa5ad"))
             painter.drawText(QRectF(board.x() + 9, y, 42, card_h), Qt.AlignmentFlag.AlignVCenter, label)
 
@@ -1404,7 +1410,7 @@ class GuiReplayer(QWidget):
         painter.setPen(QPen(QColor("#78b7ff"), 2))
         painter.setBrush(QColor(20, 29, 34, 225))
         painter.drawRoundedRect(tray, 10, 10)
-        painter.setFont(QFont("Helvetica", 10, QFont.Weight.Bold))
+        painter.setFont(replay_font("Helvetica", 10, QFont.Weight.Bold))
         painter.setPen(QColor("#eef3f7"))
         painter.drawText(
             tray.adjusted(14, 8, -14, -tray.height() + 32), Qt.AlignmentFlag.AlignLeft, f"{state.actor} receives"
@@ -1436,10 +1442,10 @@ class GuiReplayer(QWidget):
         painter.setBrush(QColor(18, 25, 29, 230))
         painter.drawRoundedRect(panel, 10, 10)
 
-        painter.setFont(QFont("Helvetica", 12, QFont.Weight.Bold))
+        painter.setFont(replay_font("Helvetica", 12, QFont.Weight.Bold))
         painter.setPen(QColor("#eef3f7"))
         painter.drawText(panel.adjusted(14, 10, -14, -88), Qt.AlignmentFlag.AlignCenter, "Final result")
-        painter.setFont(QFont("Helvetica", 9, QFont.Weight.DemiBold))
+        painter.setFont(replay_font("Helvetica", 9, QFont.Weight.DemiBold))
         y = panel.y() + 42
         for player in sorted(ofc_hand.players, key=lambda item: item.points, reverse=True):
             line = f"{player.name}: {format_number(player.points, 0)} pts"
@@ -1490,10 +1496,10 @@ class GuiReplayer(QWidget):
         painter.setPen(QPen(QColor("#46505a"), 1))
         painter.setBrush(QColor("#171d22"))
         painter.drawRoundedRect(rect, 7, 7)
-        painter.setFont(QFont("Helvetica", 12, QFont.Weight.Bold))
+        painter.setFont(replay_font("Helvetica", 12, QFont.Weight.Bold))
         painter.setPen(QColor("#eef3f7"))
         painter.drawText(rect.adjusted(14, 12, -14, -12), Qt.AlignmentFlag.AlignTop, "OFC rounds")
-        painter.setFont(QFont("Helvetica", 9, QFont.Weight.Medium))
+        painter.setFont(replay_font("Helvetica", 9, QFont.Weight.Medium))
         y = rect.y() + 44
         row_h = 44
         max_rows = max(3, int((rect.height() - 54) // row_h))
@@ -1787,7 +1793,7 @@ class GuiReplayer(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(5, 5, -5, -5), 3, 3)
             painter.setPen(QColor("#a6b4c3"))
-            painter.setFont(QFont("DejaVu Sans", max(8, int(rect.width() * 0.2)), QFont.Weight.Bold))
+            painter.setFont(replay_font("DejaVu Sans", max(8, int(rect.width() * 0.2)), QFont.Weight.Bold))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "FP")
         else:
             suit = card[-1]
@@ -1797,12 +1803,12 @@ class GuiReplayer(QWidget):
             }[suit]
             painter.setPen(QColor(color))
             font = QFont("DejaVu Sans", 10, QFont.Weight.Bold)
-            font.setPixelSize(max(16, int(rect.height() * 0.36)))
+            font.setPixelSize(min(int(rect.width() * .82), max(24, round(rect.height() * .36 * FONT_SCALE))))
             painter.setFont(font)
-            painter.drawText(rect.adjusted(6, 2, -2, -rect.height() * 0.45), Qt.AlignmentFlag.AlignLeft, card[:-1])
-            font.setPixelSize(max(13, int(rect.height() * 0.3)))
+            painter.drawText(rect.adjusted(4, 0, -2, -rect.height() * .4), Qt.AlignmentFlag.AlignLeft, card[:-1])
+            font.setPixelSize(min(int(rect.width() * .75), max(20, round(rect.height() * .3 * FONT_SCALE))))
             painter.setFont(font)
-            painter.drawText(rect.adjusted(6, rect.height() * 0.43, -5, -3), Qt.AlignmentFlag.AlignLeft, symbol)
+            painter.drawText(rect.adjusted(4, rect.height() * .51, -3, -1), Qt.AlignmentFlag.AlignLeft, symbol)
         painter.restore()
 
     def _draw_cards(
@@ -1954,8 +1960,8 @@ class GuiReplayer(QWidget):
 
     def _draw_header(self, painter: QPainter) -> None:
         painter.setPen(QColor("#eef3f7"))
-        painter.setFont(QFont("DejaVu Sans", 11, QFont.Weight.DemiBold))
-        title_width = max(240, self.width() - 420)
+        painter.setFont(replay_font("DejaVu Sans", 11, QFont.Weight.DemiBold))
+        title_width = max(200, self.width() - self.headerBox.sizeHint().width() - 40)
         hand = self.replay_model.hand
         game_title = self.info.split(" hand n°", 1)[0]
         raw_stake = f"{hand.gametype['bb']}{hand.gametype['currency']}"
@@ -1968,17 +1974,17 @@ class GuiReplayer(QWidget):
         street = "COMPLETE" if getattr(state, "ended", False) else (
             self._button_street_name(getattr(state, "street", None)) or "START"
         )
-        painter.setFont(QFont("DejaVu Sans", 9, QFont.Weight.Normal))
+        painter.setFont(replay_font("DejaVu Sans", 9, QFont.Weight.Normal))
         painter.setPen(QColor("#a6afbc"))
         metadata = str(hand.sitename) + self._special_pot_suffix(hand)
         painter.drawText(
-            QRectF(24, 32, 240, 20), Qt.AlignmentFlag.AlignLeft,
-            painter.fontMetrics().elidedText(metadata, Qt.TextElideMode.ElideRight, 240),
+            QRectF(24, 42, 290, 24), Qt.AlignmentFlag.AlignLeft,
+            painter.fontMetrics().elidedText(metadata, Qt.TextElideMode.ElideRight, 290),
         )
-        painter.drawText(QRectF(24, 52, 240, 20), Qt.AlignmentFlag.AlignLeft, f"Hand {hand.handid}")
+        painter.drawText(QRectF(24, 70, 290, 24), Qt.AlignmentFlag.AlignLeft, f"Hand {hand.handid}")
         painter.setPen(QColor("#9aa5ad"))
         painter.drawText(
-            QRectF(24, 76, 240, 22),
+            QRectF(24, 100, 290, 26),
             Qt.AlignmentFlag.AlignLeft,
             f"{street}  ·  step {self.stateSlider.value() + 1}/{max(1, len(self.states))}",
         )
@@ -2056,7 +2062,7 @@ class GuiReplayer(QWidget):
                 lbl_right = rect.center().x() - strip_w / 2 - 8
                 lbl_rect = QRectF(lbl_right - lbl_w, rect.y() - row_gap, lbl_w, card_h + row_gap)
                 painter.setPen(QColor(run_color) if info.get("winner") else QColor("#9aa5ad"))
-                painter.setFont(QFont("Helvetica", max(9, int(card_h * 0.2)), QFont.Weight.Bold))
+                painter.setFont(replay_font("Helvetica", max(9, int(card_h * 0.2)), QFont.Weight.Bold))
                 painter.drawText(
                     lbl_rect,
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
@@ -2091,7 +2097,7 @@ class GuiReplayer(QWidget):
                 pot_rect.width(),
                 pot_rect.height() + extra,
             )
-        painter.setFont(QFont("DejaVu Sans", 11, QFont.Weight.DemiBold))
+        painter.setFont(replay_font("DejaVu Sans", 11, QFont.Weight.DemiBold))
         text_width = max(painter.fontMetrics().horizontalAdvance(line) for line in pot_text.splitlines()) + 24
         if text_width > pot_rect.width():
             pot_rect = QRectF(pot_rect.center().x() - text_width / 2, pot_rect.y(), text_width, pot_rect.height())
@@ -2110,8 +2116,7 @@ class GuiReplayer(QWidget):
         street: str | None,
         is_final_frame: bool,
     ) -> None:
-        table_area_height = max(300, self.height() - CONTROL_RESERVED_HEIGHT - HEADER_HEIGHT - TABLE_MARGIN)
-        card_scale = max(MIN_CARD_SCALE, min(1.0, layout.table_rect.width() / 880, table_area_height / 520))
+        card_scale = max(MIN_CARD_SCALE, min(1.0, layout.card_width / CARD_WIDTH))
 
         name_font_size = max(9, int(10 * card_scale))
         action_font_size = max(9, int(10 * card_scale))
@@ -2160,7 +2165,7 @@ class GuiReplayer(QWidget):
         painter.drawRoundedRect(seat.panel_rect, 6, 6)
 
         painter.setPen(text)
-        painter.setFont(QFont("DejaVu Sans", name_font_size, QFont.Weight.DemiBold))
+        painter.setFont(replay_font("DejaVu Sans", name_font_size, QFont.Weight.DemiBold))
         stack_text = format_replay_amount(player.stack, self.currency_code)
         name_rect = QRectF(
             seat.panel_rect.x() + 6,
@@ -2190,7 +2195,7 @@ class GuiReplayer(QWidget):
             splash_text = f"+{format_replay_amount(player.splash, self.currency_code)} splash"
             action_text = f"{action_text}  {splash_text}".strip()
         painter.setPen(accent if actual_actor or player.is_winner else QColor("#a6afbc"))
-        painter.setFont(QFont(
+        painter.setFont(replay_font(
             "DejaVu Sans", action_font_size,
             QFont.Weight.Bold if actual_actor or player.is_winner else QFont.Weight.Normal,
         ))
@@ -2204,7 +2209,7 @@ class GuiReplayer(QWidget):
 
         if is_final_frame and (player.combination or player.hi_winner or player.lo_winner):
             combo_font_size = max(9, int(10 * card_scale))
-            combo_font = QFont("Helvetica", combo_font_size, QFont.Weight.Bold)
+            combo_font = replay_font("Helvetica", combo_font_size, QFont.Weight.Bold)
             metrics = QFontMetrics(combo_font)
             combo_text = player.combination or ""
             if player.hi_winner or player.lo_winner:
@@ -2250,7 +2255,7 @@ class GuiReplayer(QWidget):
             painter.setBrush(QColor(8, 12, 15, 205))
             painter.drawRoundedRect(seat.bet_rect, 8, 8)
             painter.setPen(QColor("#ffe769"))
-            painter.setFont(QFont("Helvetica", name_font_size, QFont.Weight.Bold))
+            painter.setFont(replay_font("Helvetica", name_font_size, QFont.Weight.Bold))
             painter.drawText(
                 seat.bet_rect,
                 Qt.AlignmentFlag.AlignCenter,
@@ -2268,7 +2273,7 @@ class GuiReplayer(QWidget):
             painter.setPen(QPen(QColor("#74828c"), 1))
             painter.setBrush(QColor("#dce2e7"))
             painter.drawEllipse(dealer_rect)
-            painter.setFont(QFont("DejaVu Sans", 9, QFont.Weight.Bold))
+            painter.setFont(replay_font("DejaVu Sans", 9, QFont.Weight.Bold))
             painter.setPen(QColor("#28323c"))
             painter.drawText(dealer_rect, Qt.AlignmentFlag.AlignCenter, "D")
 
@@ -2344,7 +2349,7 @@ class GuiReplayer(QWidget):
             self.historyDialog.setStyleSheet(REPLAYER_STYLE)
             box = QVBoxLayout(self.historyDialog)
             title = QLabel(_("Action history"))
-            title.setStyleSheet("font-size: 16px; font-weight: 600;")
+            title.setStyleSheet("font-size: 24px; font-weight: 600;")
             box.addWidget(title)
             self.historyStateLabel = QLabel()
             self.historyStateLabel.setStyleSheet("color: #98e5b7;")
@@ -2374,7 +2379,7 @@ class GuiReplayer(QWidget):
             item.setToolTip(f"Step {entry.state_index + 1} · {entry.street}")
             item.setForeground(action_colors(entry.action)[2] if entry.action else QColor("#eef1f5"))
             if entry.kind != "action":
-                item.setFont(QFont("DejaVu Sans", 10, QFont.Weight.DemiBold))
+                item.setFont(replay_font("DejaVu Sans", 10, QFont.Weight.DemiBold))
             self.historyList.addItem(item)
         self._sync_history_selection()
 
@@ -2503,26 +2508,26 @@ class GuiReplayer(QWidget):
             metrics.get("is_hero_turn")
             and (metrics.get("facing_call") or metrics.get("push_equity_pct") is not None)
         )
-        box_height = 60 if has_metrics else 48
-        rect = QRectF(280, 40, self.width() - 304, box_height)
+        box_height = 88 if has_metrics else 68
+        rect = QRectF(320, 52, self.width() - 344, box_height)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#181b21"))
         painter.drawRoundedRect(rect, 8, 8)
 
         # Line 1: Action Summary
-        painter.setFont(QFont("Helvetica", 10, QFont.Weight.Bold))
+        painter.setFont(replay_font("Helvetica", 10, QFont.Weight.Bold))
         painter.setPen(QColor("#eef3f7"))
         painter.drawText(
-            QRectF(rect.x() + 12, rect.y() + 6, rect.width() - 24, 20),
+            QRectF(rect.x() + 12, rect.y() + 8, rect.width() - 24, 26),
             Qt.AlignmentFlag.AlignLeft,
             self._current_action_summary(frame),
         )
 
         if not has_metrics:
-            painter.setFont(QFont("DejaVu Sans", 9, QFont.Weight.Normal))
+            painter.setFont(replay_font("DejaVu Sans", 9, QFont.Weight.Normal))
             painter.setPen(QColor("#9aa5ad"))
             painter.drawText(
-                QRectF(rect.x() + 12, rect.y() + 28, rect.width() - 24, 20),
+                QRectF(rect.x() + 12, rect.y() + 36, rect.width() - 24, 26),
                 Qt.AlignmentFlag.AlignLeft,
                 "← → Actions   ·   Space Next action   ·   ↑ ↓ Hands",
             )
@@ -2543,14 +2548,14 @@ class GuiReplayer(QWidget):
                 line2_parts.append(f"Edge: {edge} pts")
 
         if line2_parts:
-            painter.setFont(QFont("Helvetica", 9, QFont.Weight.DemiBold))
+            painter.setFont(replay_font("Helvetica", 9, QFont.Weight.DemiBold))
             edge_val = metrics.get("call_edge_pts")
             color = QColor("#ffe769")
             if edge_val is not None:
                 color = QColor("#4ade80") if edge_val >= 0 else QColor("#ff6b6b")
             painter.setPen(color)
             painter.drawText(
-                QRectF(rect.x() + 12, rect.y() + 28, rect.width() - 24, 20),
+                QRectF(rect.x() + 12, rect.y() + 36, rect.width() - 24, 26),
                 Qt.AlignmentFlag.AlignLeft,
                 "  ·  ".join(line2_parts),
             )
@@ -2563,10 +2568,10 @@ class GuiReplayer(QWidget):
             line3_parts.append(f"{label}: {push_pct}%")
 
         if line3_parts:
-            painter.setFont(QFont("Helvetica", 9, QFont.Weight.DemiBold))
+            painter.setFont(replay_font("Helvetica", 9, QFont.Weight.DemiBold))
             painter.setPen(QColor("#a78bfa"))
             painter.drawText(
-                QRectF(rect.x() + 12, rect.y() + 42, rect.width() - 24, 18),
+                QRectF(rect.x() + 12, rect.y() + 62, rect.width() - 24, 26),
                 Qt.AlignmentFlag.AlignLeft,
                 "  ·  ".join(line3_parts),
             )
@@ -2578,11 +2583,11 @@ class GuiReplayer(QWidget):
         painter.setPen(QPen(QColor("#303640"), 1))
         painter.setBrush(QColor("#181b21"))
         painter.drawRoundedRect(layout.timeline_rect, 7, 7)
-        painter.setFont(QFont("Helvetica", 12, QFont.Weight.Bold))
+        painter.setFont(replay_font("Helvetica", 12, QFont.Weight.Bold))
         painter.setPen(QColor("#eef3f7"))
         painter.drawText(layout.timeline_rect.adjusted(14, 12, -14, -12), Qt.AlignmentFlag.AlignTop, "Action timeline")
 
-        row_height = 32
+        row_height = 44
         max_entries = max(4, int((layout.timeline_rect.height() - 54) // row_height))
         y = layout.timeline_rect.y() + 44
         current = self.stateSlider.value()
@@ -2594,7 +2599,7 @@ class GuiReplayer(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor("#293b32") if selected else QColor("#20272d"))
                 painter.drawRoundedRect(entry_rect, 4, 4)
-            painter.setFont(QFont(
+            painter.setFont(replay_font(
                 "DejaVu Sans", 10, QFont.Weight.DemiBold if selected or entry.kind != "action" else QFont.Weight.Normal,
             ))
             painter.setPen(action_colors(entry.action)[2] if entry.action else QColor("#eef1f5"))
@@ -2717,7 +2722,7 @@ class GuiReplayer(QWidget):
             else:
                 label = street.capitalize()
             btn = QPushButton(label)
-            btn.setFixedHeight(32)
+            btn.setFixedHeight(40)
             btn.clicked.connect(lambda checked=False, s=street: self.street_clicked(checked, s))
             btn.setEnabled(street in self.replay_model.seen_streets)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)

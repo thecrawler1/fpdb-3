@@ -19,6 +19,7 @@ from fpdb_3_legacy.GuiReplayer import (
 )
 from fpdb_3_legacy.GuiTourHandViewer import TourHandViewer
 from fpdb_3_legacy.PokerStarsToFpdb import PokerStars
+from fpdb_3_legacy.replayer_style import replay_font
 
 pytestmark = pytest.mark.qt
 
@@ -223,14 +224,15 @@ def test_wide_timeline_seeks_to_original_state(qtbot, history_replayer):
     replayer.end_clicked(False)
     qtbot.wait(1)
     replayer.grab()
-    rect, index = next((rect, index) for rect, index in replayer._timeline_hit_regions if index == 3)
+    rect, index = next((rect, index) for rect, index in replayer._timeline_hit_regions if index == 6)
     qtbot.mouseClick(replayer, Qt.MouseButton.LeftButton, pos=rect.center().toPoint())
-    assert replayer.stateSlider.value() == 3
+    assert replayer.stateSlider.value() == index
 
 
 def test_transport_press_feedback_preserves_hit_area_and_release_click(qtbot, history_replayer):
     replayer = history_replayer
     button = replayer.nextButton
+    assert button.height() >= 44
     assert not button.icon().isNull()
     assert button.accessibleName()
     original_rect = button.geometry()
@@ -245,6 +247,13 @@ def test_transport_press_feedback_preserves_hit_area_and_release_click(qtbot, hi
     qtbot.wait(160)
     assert button.press_progress == 0
     assert button.iconSize().width() == 30
+
+
+def test_larger_type_preserves_original_card_dimensions(history_replayer):
+    font = replay_font("DejaVu Sans", 10, QFont.Weight.Bold)
+    assert font.pointSizeF() == 15
+    layout = build_replay_layout(1280, 720, [f"p{i}" for i in range(6)], "p0", "holdem")
+    assert (layout.card_width, layout.card_height) == (56, 72)
 
 
 @pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])
