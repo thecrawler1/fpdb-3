@@ -32,8 +32,24 @@ mais legíveis e identificação inequívoca do dono de cada aposta.
 - Fichas de 32 px, com bordas segmentadas, profundidade e denominação impressa.
   A decomposição continua exata; os valores impressos são unidades canônicas,
   enquanto o rótulo do total acompanha o modo monetário ou BB.
+- Pilhas de denominações lado a lado, com **4 px livres entre colunas**.
+  O orçamento de largura nunca comprime uma pilha sobre a vizinha. Em grupos
+  largos, o total pode ir abaixo das pilhas para manter a aposta mais próxima
+  do seu assento, preservando a separação e a contenção no feltro.
 - Volume local fixo em **50%**, substituindo os 100% da etapa anterior, com
   o controle **Sound** para ativar/silenciar.
+
+## Cartas lado a lado e atrás da placa
+
+O ajuste inspirado nas novas referências do PokerStars posiciona as cartas
+do jogador em uma fileira, com **4 px de intervalo**, sem sobreposição entre
+elas. Aproximadamente **28% da altura inferior** fica atrás da placa do jogador,
+que é desenhada depois das cartas. A fileira permanece centralizada sobre
+o nick/stack e as dimensões individuais das cartas são preservadas.
+
+O mesmo espaçamento é usado nos destaques de vencedores, runouts e animações
+de fold/descarte. Os retângulos reservados às cartas e às apostas acompanham
+a nova geometria.
 
 ## Faces completas
 
@@ -42,7 +58,7 @@ em `site_path`, lidas diretamente de
 `Gx/table-view/cards/default/1440/cache/<rank><suit>.png`.
 Isso inclui todos os pips das cartas numéricas e as figuras de J, Q e K.
 A suavização de imagem e a sombra discreta integram as faces à mesa, preservando
-as dimensões externas das cartas, a sobreposição e o verso do FPDB.
+as dimensões externas das cartas e o verso do FPDB.
 
 Quando uma face local não está disponível, o replayer usa o deck SVG `white`
 existente no projeto (Nicu Buculei/Open Clip Art Library, domínio público indicado
@@ -52,7 +68,7 @@ com uma mão pública de teste.
 
 ## Verificação
 
-- **213 testes direcionados aprovados**, incluindo layout, BB, fichas exatas,
+- **231 testes direcionados aprovados**, incluindo layout, BB, fichas exatas,
   fold, variantes, controles, áudio, equidade, compartilhamento e solver review.
 - Ruff aprovado nos arquivos alterados; mypy aprovado nos módulos de cartas,
   fichas e áudio.
@@ -70,6 +86,12 @@ com uma mão pública de teste.
 - **54 casos** cobrem cada assento em mesas de **2 a 10 jogadores**, com
   apostas simultâneas, board, pote e dealer, em três tamanhos e nos modos
   monetário/BB. Todos os grupos devem caber integralmente no oval e não colidir.
+- Verificação da ordem de pintura: cartas separadas são desenhadas antes da
+  placa que encobre suas bases. Layouts Hold'em, Omaha de seis cartas e Stud
+  preservam o espaçamento em janelas curtas, largas e verticais.
+- **15 casos** verificam as colunas efetivamente desenhadas para cinco valores
+  e três orçamentos de largura; as pilhas não se intersectam. Dois casos extras
+  conferem pilhas preservadas com o total abaixo em espaço estreito.
 - **25 mãos reais recentes**, **944 frames** e **2.306 grupos de aposta/pote**
   conferidos em 1280×720 e 1260×1380: todos dentro do feltro e sem sobreposição
   com os elementos reservados ou outros grupos. Essa conferência não gera

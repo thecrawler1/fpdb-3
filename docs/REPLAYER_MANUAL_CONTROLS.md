@@ -14,6 +14,9 @@
 - Fontes do replayer ampliadas em 50%; deck colour com faces completas locais
   do PokerStars (refinamento posterior aos índices ampliados da primeira etapa).
   As dimensões externas das cartas usam a mesma referência de viewport anterior.
+- Cartas do jogador lado a lado, sem sobreposição entre elas, com as bases
+  atrás da placa de nick/stack. Pilhas de fichas separadas por denominação;
+  o valor pode ir abaixo das pilhas quando o espaço horizontal é insuficiente.
 - Checkbox Big blinds para stacks, apostas, potes, ganhos e ações do histórico.
   A preferência fica salva. Uma variante sem big blind utilizável não oferece
   uma conversão fictícia; porcentagens e razões de equidade permanecem nessas unidades.
