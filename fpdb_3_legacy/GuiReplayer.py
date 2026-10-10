@@ -31,8 +31,11 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QLinearGradient, 
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -376,6 +379,57 @@ class ReplayModel:
     info: str
     states: list[Any]
     seen_streets: set[str]
+
+
+@dataclass(frozen=True)
+class ReplayHistoryEntry:
+    state_index: int
+    street: str
+    text: str
+    kind: str
+    action: str = ""
+
+
+def replay_is_phase(states: list[Any], index: int) -> bool:
+    """Phase copies can retain the previous actor; never treat them as actions."""
+    return index == 0 or states[index - 1].street != states[index].street
+
+
+def replay_action_text(player: Any, currency: str) -> str:
+    suffix = " (all-in)" if player.allin and player.action != "collected" else ""
+    amount = ""
+    if player.chips and player.action not in {"folds", "checks"}:
+        amount = f" {format_replay_amount(player.chips, currency)}"
+    return f"{player.name}: {player.action}{amount}{suffix}"
+
+
+def replay_phase_text(street: str | None) -> str:
+    if not street:
+        return "Start of hand"
+    if street == "BLINDSANTES":
+        return "Blinds / antes"
+    if street == "SHOWDOWN":
+        return "Showdown"
+    return f"{street.capitalize()} dealt"
+
+
+def replay_history_entries(states: list[Any], currency: str) -> list[ReplayHistoryEntry]:
+    """Presentation events retain the exact original seek index, including deals."""
+    entries = []
+    for index, state in enumerate(states):
+        street = state.street or "START"
+        if replay_is_phase(states, index):
+            text = replay_phase_text(state.street)
+            entries.append(ReplayHistoryEntry(index, street, text, "phase"))
+        else:
+            for player in state.players.values():
+                if player.justacted and player.action:
+                    entries.append(ReplayHistoryEntry(
+                        index, street, replay_action_text(player, currency), "action", player.action,
+                    ))
+        if getattr(state, "ended", False):
+            entries.append(ReplayHistoryEntry(index, street, "Hand complete", "result"))
+    return entries
 
 
 def replay_street_groups(hand: Any) -> list[tuple[str, ...]]:
@@ -842,6 +896,12 @@ class GuiReplayer(QWidget):
 
         self.headerBox = QHBoxLayout()
         self.headerBox.addStretch()
+        self.actionsButton = QPushButton(_("Actions"))
+        self.actionsButton.setToolTip(_("Open action history (A); select an entry to seek"))
+        self.actionsButton.setShortcut("A")
+        self.actionsButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.actionsButton.clicked.connect(self.actions_clicked)
+        self.headerBox.addWidget(self.actionsButton)
         self.headerBox.addWidget(self.shareButton)
         self.headerBox.addWidget(self.reviewButton)
         self.replayBox.addLayout(self.headerBox)
@@ -1204,7 +1264,7 @@ class GuiReplayer(QWidget):
     def _draw_ofc_header(self, painter: QPainter) -> None:
         painter.setPen(QColor("#eef3f7"))
         painter.setFont(QFont("DejaVu Sans", 11, QFont.Weight.DemiBold))
-        title_width = self.width() - 360
+        title_width = self.width() - 420
         title = painter.fontMetrics().elidedText(self.info, Qt.TextElideMode.ElideRight, title_width)
         painter.drawText(QRectF(24, 10, title_width, 26), Qt.AlignmentFlag.AlignLeft, title)
         state = self.states[self.stateSlider.value()] if self.states else None
@@ -1907,18 +1967,32 @@ class GuiReplayer(QWidget):
     def _draw_header(self, painter: QPainter) -> None:
         painter.setPen(QColor("#eef3f7"))
         painter.setFont(QFont("DejaVu Sans", 11, QFont.Weight.DemiBold))
-        title_width = max(240, self.width() - 360)
-        title = painter.fontMetrics().elidedText(self.info, Qt.TextElideMode.ElideRight, title_width)
+        title_width = max(240, self.width() - 420)
+        hand = self.replay_model.hand
+        game_title = self.info.split(" hand n°", 1)[0]
+        raw_stake = f"{hand.gametype['bb']}{hand.gametype['currency']}"
+        game_title = game_title.removesuffix(raw_stake).strip()
+        game_title += f" · {format_replay_amount(Decimal(str(hand.gametype['bb'])), self.currency_code)}"
+        title = painter.fontMetrics().elidedText(game_title, Qt.TextElideMode.ElideRight, title_width)
         self.setToolTip(self.info)
         painter.drawText(QRectF(24, 10, title_width, 26), Qt.AlignmentFlag.AlignLeft, title)
         state = self.states[self.stateSlider.value()] if self.states else None
-        street = self._button_street_name(getattr(state, "street", None)) or "START"
-        painter.setFont(QFont("Helvetica", 10, QFont.Weight.DemiBold))
+        street = "COMPLETE" if getattr(state, "ended", False) else (
+            self._button_street_name(getattr(state, "street", None)) or "START"
+        )
+        painter.setFont(QFont("DejaVu Sans", 9, QFont.Weight.Normal))
+        painter.setPen(QColor("#a6afbc"))
+        metadata = str(hand.sitename) + self._special_pot_suffix(hand)
+        painter.drawText(
+            QRectF(24, 32, 240, 20), Qt.AlignmentFlag.AlignLeft,
+            painter.fontMetrics().elidedText(metadata, Qt.TextElideMode.ElideRight, 240),
+        )
+        painter.drawText(QRectF(24, 52, 240, 20), Qt.AlignmentFlag.AlignLeft, f"Hand {hand.handid}")
         painter.setPen(QColor("#9aa5ad"))
         painter.drawText(
-            QRectF(24, 40, 240, 24),
+            QRectF(24, 76, 240, 22),
             Qt.AlignmentFlag.AlignLeft,
-            f"{street}  ·  action {self.stateSlider.value() + 1}/{max(1, len(self.states))}",
+            f"{street}  ·  step {self.stateSlider.value() + 1}/{max(1, len(self.states))}",
         )
 
     def _draw_board(self, painter: QPainter, frame: ReplayFrame, layout: ReplayLayout) -> None:
@@ -2052,7 +2126,11 @@ class GuiReplayer(QWidget):
         card_scale = max(MIN_CARD_SCALE, min(1.0, layout.table_rect.width() / 880, table_area_height / 520))
 
         name_font_size = max(9, int(10 * card_scale))
-        action_font_size = max(8, int(9 * card_scale))
+        action_font_size = max(9, int(10 * card_scale))
+
+        actual_actor = player.justacted and bool(player.action)
+        if getattr(self, "states", None):
+            actual_actor = actual_actor and not replay_is_phase(self.states, self.stateSlider.value())
 
         _panel_color, _border, accent = action_colors(player.action, player.justacted)
         text = QColor("#eef1f5") if player.action != "folds" else QColor("#a6afbc")
@@ -2089,15 +2167,9 @@ class GuiReplayer(QWidget):
             if dprog is not None:
                 self._draw_discarded_cards(painter, player.discard_cards, player.discard_count, seat, layout, dprog)
 
-        painter.setPen(QPen(accent if player.justacted else QColor("#303640"), 1.5 if player.justacted else 1))
-        painter.setBrush(QColor("#252c32") if player.justacted else QColor("#1b2027"))
+        painter.setPen(QPen(accent if actual_actor else QColor("#303640"), 1.5 if actual_actor else 1))
+        painter.setBrush(QColor("#252c32") if actual_actor else QColor("#1b2027"))
         painter.drawRoundedRect(seat.panel_rect, 6, 6)
-        if player.name == self.Heroes:
-            painter.setPen(QPen(QColor("#78d9a0"), 2))
-            painter.drawLine(
-                seat.panel_rect.bottomLeft() + QPointF(8, -1),
-                seat.panel_rect.bottomRight() + QPointF(-8, -1),
-            )
 
         painter.setPen(text)
         painter.setFont(QFont("DejaVu Sans", name_font_size, QFont.Weight.DemiBold))
@@ -2110,7 +2182,8 @@ class GuiReplayer(QWidget):
         )
         stack_width = painter.fontMetrics().horizontalAdvance(stack_text) + 8
         name_rect.adjust(2, 0, -stack_width, 0)
-        name_text = painter.fontMetrics().elidedText(player.name, Qt.TextElideMode.ElideRight, int(name_rect.width()))
+        name = f"★ {player.name}" if player.name == self.Heroes else player.name
+        name_text = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, int(name_rect.width()))
         painter.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name_text)
         stack_rect = QRectF(seat.panel_rect.right() - stack_width - 6, name_rect.y(), stack_width, name_rect.height())
         painter.drawText(stack_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, stack_text)
@@ -2128,8 +2201,11 @@ class GuiReplayer(QWidget):
             # actually took off the table.
             splash_text = f"+{format_replay_amount(player.splash, self.currency_code)} splash"
             action_text = f"{action_text}  {splash_text}".strip()
-        painter.setPen(accent if player.justacted else QColor("#9aa5ad"))
-        painter.setFont(QFont("DejaVu Sans", action_font_size, QFont.Weight.Medium))
+        painter.setPen(accent if actual_actor or player.is_winner else QColor("#a6afbc"))
+        painter.setFont(QFont(
+            "DejaVu Sans", action_font_size,
+            QFont.Weight.Bold if actual_actor or player.is_winner else QFont.Weight.Normal,
+        ))
         action_rect = QRectF(
             seat.panel_rect.x() + 6,
             seat.panel_rect.y() + seat.panel_rect.height() * 0.48,
@@ -2209,21 +2285,15 @@ class GuiReplayer(QWidget):
             painter.drawText(dealer_rect, Qt.AlignmentFlag.AlignCenter, "D")
 
     def _timeline_entries(self, max_entries: int = 10) -> list[str]:
-        entries = []
         states_shown = self.states[: self.stateSlider.value() + 1]
-        for state in states_shown:
-            for player in state.players.values():
-                if player.justacted and player.action:
-                    allin_suffix = " (all-in)" if player.allin and player.action != "collected" else ""
-                    if player.action == "collected" and player.chips:
-                        entries.append(
-                            f"{player.name}: collected {format_replay_amount(player.chips, self.currency_code)}"
-                        )
-                    elif player.chips and player.action not in {"folds", "checks"}:
-                        amount = format_replay_amount(player.chips, self.currency_code)
-                        entries.append(f"{player.name}: {player.action} {amount}{allin_suffix}")
-                    else:
-                        entries.append(f"{player.name}: {player.action}{allin_suffix}")
+        entries = [
+            entry.text for entry in replay_history_entries(states_shown, self.currency_code) if entry.kind == "action"
+        ]
+        entries.extend(GuiReplayer._showdown_entries(self, states_shown))
+        return entries[-max_entries:]
+
+    def _showdown_entries(self, states_shown) -> list[str]:
+        entries = []
         # At the showdown frame, append each revealed combination and any cashout.
         if states_shown and getattr(states_shown[-1], "ended", False):
             hand = self.replay_model.hand
@@ -2261,20 +2331,105 @@ class GuiReplayer(QWidget):
             for name, amount in (getattr(hand, "splashWinnings", {}) or {}).items():
                 if amount:
                     entries.append(f"{name}: splash +{format_replay_amount(amount, self.currency_code)}")
-        return entries[-max_entries:]
+        return entries
+
+    def _history_events(self) -> list[ReplayHistoryEntry]:
+        if getattr(self, "replay_mode", "hand") == "ofc":
+            return [
+                ReplayHistoryEntry(index, "OFC", self._ofc_state_label(state), "phase")
+                for index, state in enumerate(self.states)
+            ]
+        entries = replay_history_entries(self.states, self.currency_code)
+        entries.extend(
+            ReplayHistoryEntry(len(self.states) - 1, "RESULT", text, "result")
+            for text in self._showdown_entries(self.states)
+        )
+        return entries
+
+    def actions_clicked(self) -> None:
+        if not self.states:
+            return
+        if not getattr(self, "historyDialog", None):
+            self.historyDialog = QDialog(self)
+            self.historyDialog.setWindowTitle(_("Action history"))
+            self.historyDialog.resize(480, 560)
+            self.historyDialog.setStyleSheet(REPLAYER_STYLE)
+            box = QVBoxLayout(self.historyDialog)
+            title = QLabel(_("Action history"))
+            title.setStyleSheet("font-size: 16px; font-weight: 600;")
+            box.addWidget(title)
+            self.historyStateLabel = QLabel()
+            self.historyStateLabel.setStyleSheet("color: #98e5b7;")
+            box.addWidget(self.historyStateLabel)
+            hint = QLabel(_("Select a street or action to seek to that exact replay step."))
+            hint.setWordWrap(True)
+            box.addWidget(hint)
+            self.historyList = QListWidget(self.historyDialog)
+            self.historyList.itemClicked.connect(self._history_seek)
+            self.historyList.itemActivated.connect(self._history_seek)
+            box.addWidget(self.historyList)
+            close = QPushButton(_("Close"))
+            close.clicked.connect(self.historyDialog.close)
+            box.addWidget(close)
+        self._populate_history()
+        self.historyDialog.show()
+        self.historyDialog.raise_()
+
+    def _populate_history(self) -> None:
+        self.historyList.clear()
+        for entry in self._history_events():
+            label = entry.text
+            if entry.kind == "phase":
+                label = f"— {entry.text} —"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, entry.state_index)
+            item.setToolTip(f"Step {entry.state_index + 1} · {entry.street}")
+            item.setForeground(action_colors(entry.action)[2] if entry.action else QColor("#eef1f5"))
+            if entry.kind != "action":
+                item.setFont(QFont("DejaVu Sans", 10, QFont.Weight.DemiBold))
+            self.historyList.addItem(item)
+        self._sync_history_selection()
+
+    def _sync_history_selection(self) -> None:
+        if not getattr(self, "historyDialog", None):
+            return
+        index = self.stateSlider.value()
+        if getattr(self, "replay_mode", "hand") == "ofc":
+            status = self._ofc_state_label(self.states[index])
+        else:
+            status = self._current_action_summary(self._frame_from_state(self.states[index]))
+        self.historyStateLabel.setText(f"Step {index + 1}/{len(self.states)} · {status}")
+        for row in range(self.historyList.count()):
+            item = self.historyList.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == index:
+                self.historyList.setCurrentItem(item)
+                self.historyList.scrollToItem(item)
+                break
+
+    def _history_seek(self, item: QListWidgetItem) -> None:
+        if self.playing:
+            self.play_clicked(False)
+        self.stateSlider.setValue(item.data(Qt.ItemDataRole.UserRole))
 
     def _current_action_summary(self, frame: ReplayFrame) -> str:
+        index = self.stateSlider.value()
+        complete = getattr(self.states[index], "ended", False)
+        if not complete and replay_is_phase(self.states, index):
+            return replay_phase_text(frame.street)
         acted = [player for player in frame.players if player.justacted and player.action]
         if not acted:
-            return "Start of hand"
+            return "Hand complete" if complete else f"{(frame.street or 'Hand').capitalize()} review"
         player = acted[-1]
         allin_suffix = " (all-in)" if player.allin and player.action != "collected" else ""
         if player.action == "collected" and player.chips:
-            return f"{player.name} collected {format_replay_amount(player.chips, self.currency_code)}"
+            summary = f"{player.name} collected {format_replay_amount(player.chips, self.currency_code)}"
+            return f"Hand complete · {summary}" if complete else summary
         if player.chips and player.action not in {"folds", "checks"}:
             amount = format_replay_amount(player.chips, self.currency_code)
-            return f"{player.name} {player.action} {amount}{allin_suffix}"
-        return f"{player.name} {player.action}{allin_suffix}"
+            summary = f"{player.name} {player.action} {amount}{allin_suffix}"
+        else:
+            summary = f"{player.name} {player.action}{allin_suffix}"
+        return f"Hand complete · {summary}" if complete else summary
 
     def _next_actor_name(self, current_index: int) -> str | None:
         if not getattr(self, "states", None):
@@ -2360,7 +2515,8 @@ class GuiReplayer(QWidget):
         return " · ".join(parts)
 
     def _draw_summary(self, painter: QPainter, frame: ReplayFrame, layout: ReplayLayout, current_index: int) -> None:
-        metrics = self._hero_decision_metrics(frame, current_index)
+        is_phase_or_result = replay_is_phase(self.states, current_index) or getattr(self.states[current_index], "ended", False)
+        metrics = {} if is_phase_or_result else self._hero_decision_metrics(frame, current_index)
         has_metrics = bool(
             metrics.get("is_hero_turn")
             and (metrics.get("facing_call") or metrics.get("push_equity_pct") is not None)
@@ -2434,6 +2590,7 @@ class GuiReplayer(QWidget):
             )
 
     def _draw_timeline(self, painter: QPainter, layout: ReplayLayout) -> None:
+        self._timeline_hit_regions = []
         if layout.timeline_rect.isNull():
             return
         painter.setPen(QPen(QColor("#303640"), 1))
@@ -2445,22 +2602,42 @@ class GuiReplayer(QWidget):
 
         row_height = 32
         max_entries = max(4, int((layout.timeline_rect.height() - 54) // row_height))
-        painter.setFont(QFont("DejaVu Sans", 10, QFont.Weight.Normal))
         y = layout.timeline_rect.y() + 44
-        for index, entry in enumerate(self._timeline_entries(max_entries=max_entries)):
+        current = self.stateSlider.value()
+        entries = [entry for entry in self._history_events() if entry.state_index <= current][-max_entries:]
+        for index, entry in enumerate(entries):
             entry_rect = QRectF(layout.timeline_rect.x() + 10, y, layout.timeline_rect.width() - 20, row_height - 4)
-            action = entry.split(": ", 1)[1] if ": " in entry else entry
-            if index % 2 == 0:
+            selected = entry.state_index == current
+            if selected or index % 2 == 0:
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor("#20272d"))
+                painter.setBrush(QColor("#293b32") if selected else QColor("#20272d"))
                 painter.drawRoundedRect(entry_rect, 4, 4)
-            painter.setPen(action_colors(action.split(" ", 1)[0])[2])
+            painter.setFont(QFont(
+                "DejaVu Sans", 10, QFont.Weight.DemiBold if selected or entry.kind != "action" else QFont.Weight.Normal,
+            ))
+            painter.setPen(action_colors(entry.action)[2] if entry.action else QColor("#eef1f5"))
+            label = entry.text.upper() if entry.kind == "phase" else entry.text
+            if selected:
+                label = f"› {label}"
+            text_rect = entry_rect.adjusted(8, 0, -8, 0)
             painter.drawText(
-                entry_rect.adjusted(8, 0, -8, 0),
+                text_rect,
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                entry,
+                painter.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, int(text_rect.width())),
             )
+            self._timeline_hit_regions.append((entry_rect, entry.state_index))
             y += row_height
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            for rect, index in getattr(self, "_timeline_hit_regions", []):
+                if rect.contains(event.position()):
+                    if self.playing:
+                        self.play_clicked(False)
+                    self.stateSlider.setValue(index)
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: F811
         if not getattr(self, "states", None):
@@ -2535,6 +2712,7 @@ class GuiReplayer(QWidget):
                 self.shared_hero = self.Heroes
         self.info = self.replay_model.info
         self.states = self.replay_model.states
+        self._timeline_hit_regions = []
         self.shareButton.setEnabled(self.shared_hand is not None)
         self.reviewButton.setEnabled(self.shared_hand is not None)
 
@@ -2572,6 +2750,8 @@ class GuiReplayer(QWidget):
         self.audio.stop()
         self.stateSlider.setMaximum(max(0, len(self.states) - 1))
         self.stateSlider.setValue(0)
+        if getattr(self, "historyDialog", None):
+            self._populate_history()
         self._sound_frame_index = 0
         self.audio.play("deal")
         self._sync_replayer_controls()
@@ -2632,6 +2812,7 @@ class GuiReplayer(QWidget):
                 self.audio.stop()
             self._sync_replayer_controls()
             self._maybe_start_fold_animation(value)
+        self._sync_history_selection()
         self.update()
 
     def _maybe_start_fold_animation(self, value) -> None:
@@ -2723,6 +2904,8 @@ class GuiReplayer(QWidget):
         self.stateSlider.setValue(0)
 
     def closeEvent(self, event) -> None:
+        if getattr(self, "historyDialog", None):
+            self.historyDialog.close()
         self.audio.stop()
         self.playing = False
         if getattr(self, "playTimer", None):

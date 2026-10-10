@@ -20,4 +20,9 @@ QSlider:horizontal { min-height: 16px; max-height: 16px; }
 QSlider::groove:horizontal { height: 4px; background: #303640; border-radius: 2px; }
 QSlider::handle:horizontal, QSlider::handle:horizontal:enabled { image: none; background: #98e5b7; background-color: #98e5b7; border: none; width: 12px; margin: -4px 0; border-radius: 6px; }
 QSlider::sub-page:horizontal { background: #78d9a0; border-radius: 2px; }
+QListWidget { background: #181b21; border: 1px solid #303640; border-radius: 6px; }
+QListWidget::item { padding: 8px; min-height: 16px; max-height: 16px; border-bottom: 1px solid #252a32; }
+QListWidget::item:selected { background: #293b32; color: #eef1f5; }
+QListWidget::item:hover { background: #252c32; }
+QListWidget::item:selected:hover { background: #293b32; }
 """
