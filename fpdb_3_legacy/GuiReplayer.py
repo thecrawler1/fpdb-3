@@ -1038,10 +1038,10 @@ class GuiReplayer(QWidget):
                         quantum = min(quantum, Decimal(1).scaleb(amount.normalize().as_tuple().exponent))
         self.chip_quantum = quantum
 
-    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=(), owner=None) -> None:
+    def _draw_chip_amount(self, painter, amount, anchor, caption="", *, show_chips=True, max_width=240, avoid=(), available=None) -> None:
         text = f"{caption}: {self._format_amount(amount)}" if caption else self._format_amount(amount)
         bounds, stacks = draw_chip_amount(
-            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid, owner=owner,
+            painter, amount, anchor, text, self.chip_quantum, show_chips=show_chips, max_width=max_width, avoid=avoid, available=available,
         )
         breakdown = "; ".join(f"{stack.count} × {self._format_amount(stack.denomination)}" for stack in stacks)
         tooltip = f"{text}\n{breakdown}" if breakdown else text
@@ -1869,6 +1869,8 @@ class GuiReplayer(QWidget):
 
     def _paint_card(self, painter: QPainter, card: str, rect: QRectF) -> None:
         """Use complete faces for colour; retain its subtle patterned backs."""
+        if hasattr(self, "_seat_overlay_regions"):
+            self._seat_overlay_regions.append(painter.worldTransform().mapRect(rect).adjusted(-2, -2, 2, 3))
         if getattr(self, "_record_board_cards", False):
             self._board_regions.append(QRectF(rect))
         if self.deckType != "colour":
@@ -2172,6 +2174,7 @@ class GuiReplayer(QWidget):
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                     label,
                 )
+                getattr(self, "_seat_overlay_regions", []).append(QRectF(lbl_rect))
 
         pots = frame.pots if frame.pots else [("Pot", frame.pot)]
         pot_total = sum(amount for _label, amount in pots)
@@ -2342,6 +2345,7 @@ class GuiReplayer(QWidget):
             painter.setPen(QColor("#f5f7fa") if financial else accent)
             painter.drawText(action_rect.adjusted(8, 2, -8, -2),
                              Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, action_text)
+            getattr(self, "_seat_overlay_regions", []).append(QRectF(action_rect))
 
         if is_final_frame and (player.combination or player.hi_winner or player.lo_winner):
             combo_font_size = max(9, int(10 * card_scale))
@@ -2385,33 +2389,7 @@ class GuiReplayer(QWidget):
             painter.setPen(QColor("#ffd34d") if is_win else QColor("#c4cdd4"))
             painter.setFont(combo_font)
             painter.drawText(combo_rect, Qt.AlignmentFlag.AlignCenter, combo_text)
-
-        if player.chips:
-            cluster = seat.panel_rect
-            target = seat.bet_rect.center()
-            if abs(seat.center.x() - layout.table_rect.center().x()) < cluster.width() / 2 and target.y() < cluster.top():
-                cluster = seat.cards_rect
-            owner = QPointF(
-                max(cluster.left(), min(target.x(), cluster.right())),
-                max(cluster.top(), min(target.y(), cluster.bottom())),
-            )
-            avoid = [region for other_seat in layout.seats.values() for region in (other_seat.cards_rect, other_seat.panel_rect)]
-            avoid.extend(bounds for bounds, _tooltip in getattr(self, "_chip_regions", []))
-            visible_board = self.states[self.stateSlider.value()].renderBoard
-            if any(phase.startswith(("FLOP", "TURN", "RIVER")) for phase in visible_board) or (
-                layout.seats and self.replay_model.hand.gametype.get("category", "").lower().startswith("cour")
-            ):
-                avoid.extend(getattr(self, "_board_regions", None) or [layout.board_rect])
-            if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat:
-                size = max(24, int(DEALER_BUTTON_BASE_SIZE * card_scale))
-                avoid.append(QRectF(seat.dealer_pos.x() - size / 2, seat.dealer_pos.y() - size / 2, size, size))
-            self._draw_chip_amount(
-                painter, player.chips, seat.bet_rect.center(),
-                _("Won") if player.action == "collected" else "",
-                max_width=200,
-                avoid=tuple(avoid),
-                owner=owner,
-            )
+            getattr(self, "_seat_overlay_regions", []).append(QRectF(combo_rect))
 
         if getattr(self.replay_model.hand, "buttonpos", 0) == player.seat and not self.dealer.isNull():
             dealer_size = max(24, int(DEALER_BUTTON_BASE_SIZE * card_scale))
@@ -2427,6 +2405,28 @@ class GuiReplayer(QWidget):
             painter.setFont(replay_font("DejaVu Sans", 9, QFont.Weight.Bold))
             painter.setPen(QColor("#28323c"))
             painter.drawText(dealer_rect, Qt.AlignmentFlag.AlignCenter, "D")
+            getattr(self, "_seat_overlay_regions", []).append(QRectF(dealer_rect))
+
+    def _draw_player_bet(self, painter, player, seat, layout) -> None:
+        """Paint bets only after all seats have reserved their visible overlays."""
+        if not player.chips:
+            return
+        lift = int(layout.card_height * .18) + 4
+        avoid = [region for other in layout.seats.values() for region in (
+            other.cards_rect.adjusted(-2, -lift, 2, 4), other.panel_rect.adjusted(0, 0, 0, 3),
+        )]
+        avoid.extend(getattr(self, "_seat_overlay_regions", []))
+        avoid.extend(bounds for bounds, _tooltip in getattr(self, "_chip_regions", []))
+        avoid.extend(getattr(self, "_board_regions", []))
+        if not layout.timeline_rect.isNull():
+            avoid.append(layout.timeline_rect)
+        self._draw_chip_amount(
+            painter, player.chips, seat.bet_rect.center(),
+            _("Won") if player.action == "collected" else "",
+            max_width=200, avoid=tuple(avoid),
+            available=QRectF(8, HEADER_HEIGHT + 2, self.width() - 16,
+                             self.height() - CONTROL_RESERVED_HEIGHT - HEADER_HEIGHT - 4),
+        )
 
     def _timeline_entries(self, max_entries: int = 10) -> list[str]:
         states_shown = self.states[: self.stateSlider.value() + 1]
@@ -2802,6 +2802,7 @@ class GuiReplayer(QWidget):
     def paintEvent(self, event) -> None:  # noqa: F811
         self._chip_regions = []
         self._board_regions = []
+        self._seat_overlay_regions = []
         if not getattr(self, "states", None):
             return
         if not getattr(self, "replay_model", None):
@@ -2836,6 +2837,10 @@ class GuiReplayer(QWidget):
             seat = layout.seats.get(player.name)
             if seat is not None:
                 self._draw_player(painter, player, seat, layout, frame.street, is_final_frame)
+        for player in frame.players:
+            seat = layout.seats.get(player.name)
+            if seat is not None:
+                self._draw_player_bet(painter, player, seat, layout)
         self._draw_timeline(painter, layout)
 
     def play_hand(self, handidx) -> None:  # noqa: F811

@@ -24,6 +24,31 @@ def _draw_denomination(painter: QPainter, stack: ChipStack, top: QRectF, color: 
     painter.drawText(top, Qt.AlignmentFlag.AlignCenter, denomination)
 
 
+def _place_amount(anchor: QPointF, width: float, height: float, avoid: tuple[QRectF, ...], available: QRectF | None) -> QRectF:
+    """Find a free rectangle; never fall back to an obstructed anchor."""
+    obstacles = [region.adjusted(-4, -4, 4, 4) for region in avoid]
+    offsets = sorted(
+        ((x, y) for x in (0, -36, 36, -72, 72, -108, 108) for y in (0, -40, 40, -52, 52, -80, 80, -100, 100)),
+        key=lambda offset: abs(offset[0]) + abs(offset[1]),
+    )
+    candidates = [(anchor.x() + x, anchor.y() + y) for x, y in offsets]
+    # Every free rectangular cell has an edge at an obstacle or viewport
+    # boundary. Search those edges if the nearby offsets are all occupied.
+    xs, ys = {anchor.x()}, {anchor.y()}
+    for region in obstacles:
+        xs.update((region.left() - width / 2 - 1, region.right() + width / 2 + 1))
+        ys.update((region.top() - height / 2 - 1, region.bottom() + height / 2 + 1))
+    if available is not None:
+        xs.update((available.left() + width / 2, available.right() - width / 2))
+        ys.update((available.top() + height / 2, available.bottom() - height / 2))
+    candidates.extend(sorted(((x, y) for x in xs for y in ys), key=lambda p: (p[0] - anchor.x()) ** 2 + (p[1] - anchor.y()) ** 2))
+    for x, y in candidates:
+        bounds = QRectF(x - width / 2, y - height / 2, width, height)
+        if (available is None or available.contains(bounds)) and all(not bounds.intersects(region) for region in obstacles):
+            return bounds
+    return QRectF()
+
+
 def draw_chip_amount(
     painter: QPainter,
     amount: Decimal,
@@ -34,7 +59,7 @@ def draw_chip_amount(
     show_chips: bool = True,
     max_width: float = 240,
     avoid: tuple[QRectF, ...] = (),
-    owner: QPointF | None = None,
+    available: QRectF | None = None,
 ) -> tuple[QRectF, list[ChipStack]]:
     stacks = chip_stacks(amount, quantum) if show_chips else []
     painter.save()
@@ -46,28 +71,15 @@ def draw_chip_amount(
     stride = min(30, max(12, (max_width - label_width - gap - diameter) / max(1, len(stacks) - 1)))
     chips_width = diameter + (len(stacks) - 1) * stride if stacks else 0
     width = chips_width + gap + label_width
-    offsets = sorted(
-        ((x, y) for x in (0, -36, 36, -72, 72, -108, 108) for y in (0, -40, 40, -52, 52, -80, 80, -100, 100)),
-        key=lambda offset: abs(offset[0]) + abs(offset[1]),
-    )
-    for offset_x, offset_y in offsets:
-        candidate = QPointF(anchor.x() + offset_x, anchor.y() + offset_y)
-        bounds = QRectF(candidate.x() - width / 2, candidate.y() - label_height / 2, width, label_height)
-        if all(not bounds.intersects(region.adjusted(-4, -4, 4, 4)) for region in avoid):
-            anchor = candidate
-            break
-    left = anchor.x() - width / 2
-    if owner is not None:
-        bounds = QRectF(left, anchor.y() - label_height / 2, width, label_height)
-        endpoint = QPointF(
-            max(bounds.left(), min(owner.x(), bounds.right())),
-            max(bounds.top(), min(owner.y(), bounds.bottom())),
-        )
-        painter.setPen(QPen(QColor(184, 201, 207, 150), 1.5, Qt.PenStyle.DotLine))
-        painter.drawLine(owner, endpoint)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#b8c9cf"))
-        painter.drawEllipse(owner, 2, 2)
+    bounds = _place_amount(anchor, width, label_height, avoid, available)
+    if bounds.isNull():
+        painter.restore()
+        if stacks:
+            # Prefer the exact amount over decorative stacks in a crowded view.
+            bounds, _ = draw_chip_amount(painter, amount, anchor, text, quantum, show_chips=False, avoid=avoid, available=available)
+        return bounds, stacks
+    anchor = bounds.center()
+    left = bounds.left()
     for column, stack in enumerate(stacks):
         center_x = left + diameter / 2 + column * stride
         color = QColor(stack.color)

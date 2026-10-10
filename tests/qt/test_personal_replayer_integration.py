@@ -302,6 +302,7 @@ def test_result_plaque_shows_total_stack_and_preserves_separate_award_and_financ
     painter = MagicMock()
     painter.setFont.side_effect = lambda font: setattr(painter.fontMetrics, "return_value", QFontMetrics(font))
     replayer._draw_player(painter, player, layout.seats[player.name], layout, state.street, True)
+    replayer._draw_player_bet(painter, player, layout.seats[player.name], layout)
     labels = [call.args[-1] for call in painter.drawText.call_args_list]
     assert "89.50 BB" in labels
     assert "cashout 1.25 BB  +2.50 BB splash" in labels
@@ -412,6 +413,32 @@ def test_winning_chip_stack_clears_dealer_and_card_slots(qtbot, history_replayer
     dealer = QRectF(seat.dealer_pos.x() - diameter / 2, seat.dealer_pos.y() - diameter / 2, diameter, diameter)
     assert not bounds.intersects(dealer)
     assert all(not bounds.intersects(other.cards_rect) for other in layout.seats.values())
+
+
+@pytest.mark.parametrize("size", [(1060, 720), (1280, 720), (1600, 900), (1260, 1380)])
+@pytest.mark.parametrize("big_blinds", [False, True])
+def test_all_bets_clear_visible_overlays_and_stay_above_controls(qtbot, history_replayer, size, big_blinds):
+    replayer = history_replayer
+    replayer.resize(*size)
+    replayer.bigBlindCheck.setChecked(big_blinds)
+    for index, state in enumerate(replayer.states):
+        replayer.stateSlider.setValue(index)
+        replayer._clear_card_animations()
+        replayer.grab()
+        bet_count = sum(bool(player.chips) for player in state.players.values())
+        if not bet_count:
+            continue
+        # Bets are painted after central pots and all player overlays.
+        bets = replayer._chip_regions[-bet_count:]
+        assert len(bets) == bet_count
+        for bounds, _text in bets:
+            assert not bounds.isNull(), (size, big_blinds, index)
+            assert all(not bounds.intersects(region) for region in replayer._seat_overlay_regions), (size, big_blinds, index)
+            assert bounds.bottom() < replayer.height() - CONTROL_RESERVED_HEIGHT
+            assert bounds.left() >= 0 and bounds.right() <= replayer.width()
+        for i, (bounds, _text) in enumerate(replayer._chip_regions):
+            if i >= len(replayer._chip_regions) - bet_count:
+                assert all(not bounds.intersects(other) for other, _ in replayer._chip_regions[:i])
 
 
 @pytest.mark.parametrize("viewer_class", [GuiHandViewer, TourHandViewer])
