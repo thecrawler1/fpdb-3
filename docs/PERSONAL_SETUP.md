@@ -12,6 +12,9 @@ Git acima identifica precisamente o conjunto de funcionalidades incorporado.
 
 ## Alterações
 
+- Identidade visual compartilhada inspirada em GTO Wizard/Linear, com verde
+  do stepper, textos +25%, navegação lateral e colunas configuráveis. Cartas
+  do replayer +25%; veja [DESIGN_REFRESH.md](DESIGN_REFRESH.md).
 - Tela **Cash → Results (Ctrl+R)** com resultados por dia/semana/mês/ano,
   VPIP/PFR, lucro, bb/100, EV e EV bb/100, quatro curvas e acesso às mãos do
   período. Sem seletor ou agrupamento de moeda; primeira versão cash USD.
