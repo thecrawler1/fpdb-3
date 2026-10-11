@@ -2021,6 +2021,7 @@ class fpdb(QMainWindow):
         def build(module):
             page = module.GuiResultsViewer(self.config, self.sql)
             page.hands_requested.connect(self._open_result_hands)
+            page.import_requested.connect(lambda: self.tab_bulk_import(None))
             return page
 
         self.open_tab("Results", build, module="fpdb_3_legacy.GuiResultsViewer", allow_multiple=False)

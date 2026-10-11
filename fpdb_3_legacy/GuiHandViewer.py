@@ -19,17 +19,19 @@ from __future__ import annotations
 # import L10n
 # _ = L10n.get_translation()
 import contextlib
+from collections import OrderedDict
 from decimal import Decimal
 from functools import partial
 from io import StringIO
 from typing import Any
 
-from PySide6.QtCore import QCoreApplication, QSize, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QRegularExpression, QSize, QSortFilterProxyModel, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QDoubleValidator,
     QIntValidator,
+    QRegularExpressionValidator,
     QStandardItem,
     QStandardItemModel,
 )
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QSplitter,
     QTableView,
     QToolButton,
@@ -58,7 +61,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fpdb_3_legacy import SQL, Card, Configuration, Database, Deck, Filters, GuiReplayer, Hand, gui_empty_state
+from fpdb_3_legacy import SQL, Card, Configuration, Database, Deck, Filters, GuiReplayer, Hand
 from fpdb_3_legacy.analytics_query import escape_literal_percent
 from fpdb_3_legacy.design_system import current_palette
 from fpdb_3_legacy.hand_review_dialog import add_review_action
@@ -68,6 +71,7 @@ from fpdb_3_legacy.holdem_classes import RANKS, grid_labels
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_datetime, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
+from fpdb_3_legacy.review_widgets import EmptyState, FilterChips, labeled_control, review_stylesheet, text_label
 from fpdb_3_legacy.table_cards import card_tokens, render_table_cards, table_card_icon
 from fpdb_3_legacy.table_columns import install_column_controls
 
@@ -157,6 +161,7 @@ class GuiHandViewer(QSplitter):
         self.main_window = mainwin
         self.sql = querylist
         self.replayer: Any = None
+        self._page_loading = False
 
         self.db = Database.Database(self.config, sql=self.sql)
 
@@ -205,12 +210,28 @@ class GuiHandViewer(QSplitter):
 
         self.handsFrame = QFrame()
         self.handsFrame.setObjectName("handsSurface")
+        self.handsFrame.setStyleSheet(review_stylesheet())
         self.handsVBox = QVBoxLayout()
         self.handsFrame.setLayout(self.handsVBox)
         toolbar = QHBoxLayout()
-        title = QLabel(_("Hands"))
-        title.setStyleSheet("font-size:20px; font-weight:600;")
-        toolbar.addWidget(title)
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        heading.addWidget(text_label(_("Hands"), "title"))
+        heading.addWidget(text_label(_("Choose a hand to review"), "caption"))
+        toolbar.addLayout(heading)
+        self.handSearch = QLineEdit()
+        self.handSearch.setPlaceholderText(_("Find hand ID…"))
+        self.handSearch.setToolTip(_("Search internal or site hand ID across all loaded pages. Partial IDs are accepted."))
+        self.handSearch.setAccessibleName(_("Find hand ID"))
+        self.handSearch.setClearButtonEnabled(True)
+        self.handSearch.setMaximumWidth(240)
+        self.handSearch.setMaxLength(31)
+        self.handSearch.setValidator(QRegularExpressionValidator(QRegularExpression(r"#?[0-9]{0,30}"), self))
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self.handSearch.textChanged.connect(lambda _text: self._search_timer.start())
+        self._search_timer.timeout.connect(self._apply_id_search)
         toolbar.addStretch()
         self.filtersButton = QPushButton(_("Filters"))
         self.filtersButton.setCheckable(True)
@@ -226,8 +247,19 @@ class GuiHandViewer(QSplitter):
         self.replayButton = QPushButton(_("Replay"))
         self.replayButton.setProperty("primaryAction", True)
         self.replayButton.clicked.connect(self._replay_selected)
-        toolbar.addWidget(self.replayButton)
         self.handsVBox.addLayout(toolbar)
+        search_row = QHBoxLayout()
+        search_row.addWidget(labeled_control(_("Find a hand"), self.handSearch))
+        search_row.addStretch()
+        self.reviewHint = text_label(_("Double-click to replay · Ctrl+C to copy"), "caption")
+        search_row.addWidget(self.reviewHint, 0, Qt.AlignmentFlag.AlignBottom)
+        self.handsVBox.addLayout(search_row)
+        self.active_hand_filters = FilterChips()
+        self.handsVBox.addWidget(self.active_hand_filters)
+        self.handStatusLabel = QLabel()
+        self.handStatusLabel.setWordWrap(True)
+        self.handStatusLabel.hide()
+        self.handsVBox.addWidget(self.handStatusLabel)
         scroll.hide()
 
         self.addWidget(scroll)
@@ -267,6 +299,21 @@ class GuiHandViewer(QSplitter):
         self.view.horizontalHeader().setStretchLastSection(False)
         self.view.setSelectionBehavior(QTableView.SelectRows)
         self.handsVBox.addWidget(self.view)
+        self.empty_state = EmptyState(self.view)
+        self.selectionBar = QWidget()
+        self.selectionBar.setObjectName("handSelectionBar")
+        selection_layout = QHBoxLayout(self.selectionBar)
+        selection_layout.setContentsMargins(0, 10, 0, 4)
+        selection_text = QVBoxLayout()
+        selection_text.setSpacing(2)
+        self.selectedHandLabel = text_label(_("Select a hand"), "heading")
+        self.selectedHandDetails = text_label(_("Its cards and result will appear here."), "caption")
+        selection_text.addWidget(self.selectedHandLabel)
+        selection_text.addWidget(self.selectedHandDetails)
+        selection_layout.addLayout(selection_text)
+        selection_layout.addStretch()
+        selection_layout.addWidget(self.replayButton)
+        self.handsVBox.addWidget(self.selectionBar)
         self.model = QStandardItemModel(0, len(self.colnum), self.view)
         self.filterModel = PagedHandProxy()
         self.filterModel.setSourceModel(self.model)
@@ -279,9 +326,9 @@ class GuiHandViewer(QSplitter):
                 "Date",
                 "Flags",
                 "Stakes",
-                "Nb Players",
+                "Players",
                 "Position",
-                "Hands",
+                "Cards",
                 "Preflop Action",
                 "Board",
                 "Postflop Action",
@@ -303,9 +350,16 @@ class GuiHandViewer(QSplitter):
         )
         self.columnsButton.setMenu(self.columnControls.menu())
         self.replayButton.setEnabled(False)
-        self.view.selectionModel().currentRowChanged.connect(
-            lambda current, _old: self.replayButton.setEnabled(current.isValid()),
-        )
+        self.view.selectionModel().currentRowChanged.connect(self._update_selected_hand)
+        for key, description in {
+            "Date": _("When the hand was played, in your display time zone."),
+            "Street0": _("Hero's starting cards. Double-click the row to replay the hand."),
+            "Street1-4": _("Community cards; multiple boards are stacked."),
+            "Net": _("Hero's net result after contributions and collected money."),
+            "Total Pot": _("Total pot for the hand, not just the amount won by Hero."),
+            "Pos": _("Hero's position: SB, BB, BTN, CO, HJ, LJ, MP or UTG."),
+        }.items():
+            self.model.setHeaderData(self.colnum[key], Qt.Orientation.Horizontal, description, Qt.ItemDataRole.ToolTipRole)
 
         self.view.doubleClicked.connect(self.row_activated)
         setattr(self.view, "contextMenuEvent", self.contextMenu)
@@ -323,6 +377,11 @@ class GuiHandViewer(QSplitter):
         # is reconstructed/rendered at a time (each hand is rebuilt from the DB,
         # which is expensive on large databases such as GGPoker).
         self.all_handids: list[Any] = []
+        self._loaded_handids: list[Any] = []
+        self._hand_numbers: dict[Any, str] | None = None
+        self._active_search = ""
+        self.hands: OrderedDict[Any, Any] = OrderedDict()
+        self._rendered_page: int | None = None
         self.page = 0
         self.page_size = 100
         self._sort_column = self.colnum["Date"]
@@ -334,12 +393,28 @@ class GuiHandViewer(QSplitter):
         self.prevPageButton = QPushButton(_("◀ Prev"))
         self.nextPageButton = QPushButton(_("Next ▶"))
         self.pageLabel = QLabel("")
+        self.pageSpin = QSpinBox()
+        self.pageSpin.setKeyboardTracking(False)
+        self.pageSpin.setPrefix(_("Page "))
+        self.pageSpin.setAccessibleName(_("Go to page"))
+        self.pageSpin.valueChanged.connect(self._jump_to_page)
+        self.pageSizeCombo = QComboBox()
+        self.pageSizeCombo.setAccessibleName(_("Hands per page"))
+        for size in (25, 50, 100, 250):
+            self.pageSizeCombo.addItem(str(size), size)
+        saved_size = self.columnControls.settings.value("cash-hands/page-size", 100, type=int)
+        self.page_size = saved_size if saved_size in (25, 50, 100, 250) else 100
+        self.pageSizeCombo.setCurrentIndex(self.pageSizeCombo.findData(self.page_size))
+        self.pageSizeCombo.currentIndexChanged.connect(self._change_page_size)
         self.prevPageButton.clicked.connect(self.prev_page)
         self.nextPageButton.clicked.connect(self.next_page)
         self.pagerBox.addWidget(self.prevPageButton)
         self.pagerBox.addWidget(self.nextPageButton)
+        self.pagerBox.addWidget(self.pageSpin)
         self.pagerBox.addWidget(self.pageLabel)
         self.pagerBox.addStretch(1)
+        self.pagerBox.addWidget(QLabel(_("Hands per page")))
+        self.pagerBox.addWidget(self.pageSizeCombo)
         # Flag filters (applied at the SQL level on the next Load Hands).
         self.flagAllIn = QCheckBox("AI")
         self.flagShowdown = QCheckBox("SD")
@@ -355,41 +430,107 @@ class GuiHandViewer(QSplitter):
             "Bomb": "bomb pot",
             "2xB": "double board",
         }
-        self.flagFilters = QWidget()
-        flags_layout = QHBoxLayout(self.flagFilters)
-        flags_layout.setContentsMargins(0, 0, 0, 0)
-        for cb in (
+        self.flagFilters = QGroupBox(_("Hand features"))
+        flags_layout = QGridLayout(self.flagFilters)
+        for index, cb in enumerate((
             self.flagAllIn,
             self.flagShowdown,
             self.flagRunItTwice,
             self.flagCashout,
             self.flagBombPot,
             self.flagDoubleBoard,
-        ):
+        )):
             cb.setToolTip(_("Filter: ") + _flag_tips[cb.text()])
-            cb.stateChanged.connect(lambda _state: self.loadHands(None))
-            flags_layout.addWidget(cb)
+            cb.setText(_({"AI": "All-in", "SD": "Showdown", "RIT": "Run it twice", "CO$": "Cashout",
+                          "Bomb": "Bomb pot", "2xB": "Double board"}[cb.text()]))
+            cb.stateChanged.connect(self._hand_features_changed)
+            flags_layout.addWidget(cb, index // 2, index % 2)
         self.flagSplashPot = QComboBox()
         self.flagSplashPot.addItem(_("All hands"), "all")
         self.flagSplashPot.addItem(_("Splash pots only"), "only")
         self.flagSplashPot.addItem(_("Exclude splash pots"), "exclude")
         self.flagSplashPot.setToolTip(_("Filter: splash pot"))
-        self.flagSplashPot.currentIndexChanged.connect(lambda _index: self.loadHands(None))
-        flags_layout.addWidget(self.flagSplashPot)
-        flags_layout.addStretch()
+        self.flagSplashPot.currentIndexChanged.connect(self._hand_features_changed)
+        flags_layout.addWidget(QLabel(_("Splash pot")), 3, 0)
+        flags_layout.addWidget(self.flagSplashPot, 3, 1)
         self.flagFilters.hide()
         self.filtersButton.toggled.connect(self.flagFilters.setVisible)
-        self.handsVBox.addWidget(self.flagFilters)
+        self.filterPanelLayout.insertWidget(0, self.flagFilters)
         self.handsVBox.addLayout(self.pagerBox)
         self._update_pager()
 
-        self.view.resizeColumnsToContents()
+        self.columnControls.resize_to_contents()
         self.view.setSortingEnabled(True)
 
     def _replay_selected(self) -> None:
         index = self.view.currentIndex()
         if index.isValid():
             self.row_activated(index)
+
+    def _update_selected_hand(self, _current=None, _previous=None) -> None:
+        index = self.view.currentIndex()
+        self.replayButton.setEnabled(index.isValid() and not self._page_loading)
+        if not index.isValid():
+            self.selectedHandLabel.setText(_("Select a hand"))
+            self.selectedHandDetails.setText(_("Its cards and result will appear here."))
+            return
+        value = lambda key, role=Qt.ItemDataRole.DisplayRole: index.siblingAtColumn(self.colnum[key]).data(role)
+        self.selectedHandLabel.setText(_("Hand #{0}").format(value('SiteHandNo') or value('HandId')))
+        suits = {"h": "♥", "d": "♦", "c": "♣", "s": "♠"}
+        cards = " ".join(card[0] + suits.get(card[-1], "?") for card in (value('Street0', Qt.ItemDataRole.UserRole + 1) or "").split())
+        self.selectedHandDetails.setText(f"{cards} · {value('Pos')} · " + _("Net {0}").format(value('Net')))
+
+    def _hand_features_changed(self) -> None:
+        self._update_hand_filter_chips()
+        self.loadHands(None)
+
+    def _clear_hand_features(self) -> None:
+        for checkbox in self._feature_checkboxes():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+        self.flagSplashPot.blockSignals(True)
+        self.flagSplashPot.setCurrentIndex(0)
+        self.flagSplashPot.blockSignals(False)
+        self.loadHands(None)
+
+    def _feature_checkboxes(self):
+        return (self.flagAllIn, self.flagShowdown, self.flagRunItTwice,
+                self.flagCashout, self.flagBombPot, self.flagDoubleBoard)
+
+    def _update_hand_filter_chips(self) -> None:
+        entries = []
+        labels = [checkbox.text() for checkbox in self._feature_checkboxes() if checkbox.isChecked()]
+        if self.flagSplashPot.currentData() != "all":
+            labels.append(self.flagSplashPot.currentText())
+        if labels:
+            label = ", ".join(labels[:2]) + (f" +{len(labels) - 2}" if len(labels) > 2 else "")
+            entries.append(("features", label, self._clear_hand_features))
+        if self.handSearch.text().lstrip("#"):
+            entries.append(("id", _("Hand ID: ") + self.handSearch.text(), self.handSearch.clear))
+        self.active_hand_filters.set_entries(entries, self._clear_review_filters)
+        if labels:
+            self.active_hand_filters.buttons['features'].setToolTip(_("Clear hand features: ") + ", ".join(labels))
+
+    def _clear_review_filters(self) -> None:
+        self.handSearch.blockSignals(True)
+        self.handSearch.clear()
+        self.handSearch.blockSignals(False)
+        self._search_timer.stop()
+        self._clear_hand_features()
+
+    def _update_hand_empty_state(self) -> None:
+        if self.filterModel.rowCount():
+            self.empty_state.hide()
+        elif self.handSearch.text().lstrip("#"):
+            self.empty_state.show_message(_("No matching hand"), _("Clear the ID search to return to your loaded hand list."),
+                                          _("Clear search"), self.handSearch.clear)
+        elif not self._loaded_handids:
+            self.empty_state.show_message(_("No hands to review"), _("Open filters, choose a Hero and date range, then load hands."),
+                                          _("Open filters"), lambda: self.filtersButton.setChecked(True))
+        else:
+            self.empty_state.show_message(_("No hands available on this page"), _("Try loading the page again or adjust the filters."),
+                                          _("Reload page"), self.render_page)
 
     def _build_advanced_filters(self) -> QGroupBox:
         group = QGroupBox(_("Advanced review filters"))
@@ -598,6 +739,7 @@ class GuiHandViewer(QSplitter):
 
     def close_owned_database(self) -> None:
         """Release the connection created for this tab."""
+        self._search_timer.stop()
         with contextlib.suppress(Exception):
             if self.replayer is not None:
                 self.replayer.close()
@@ -620,6 +762,8 @@ class GuiHandViewer(QSplitter):
         return card_images
 
     def loadHands(self, checkState) -> None:
+        if self._page_loading:
+            return
         hand_ids = self.get_hand_ids_from_date_range(
             self.filters.getDates()[0],
             self.filters.getDates()[1],
@@ -738,87 +882,234 @@ class GuiHandViewer(QSplitter):
         return 0
 
     def reload_hands(self, handids) -> None:
-        self.hands: dict[Any, Any] = {}
-        self.all_handids = list(handids)
+        if self._page_loading:
+            return
+        self.hands = OrderedDict()
+        self._loaded_handids = list(dict.fromkeys(handids))
+        self.all_handids = list(self._loaded_handids)
+        self._hand_numbers = None
+        self._active_search = ""
+        self._rendered_page = None
+        self._search_timer.stop()
+        self.handSearch.blockSignals(True)
+        self.handSearch.clear()
+        self.handSearch.blockSignals(False)
+        self._set_hand_status("")
         self._sort_keys = {}
         self.page = 0
         self.model.removeRows(0, self.model.rowCount())
         if len(self.all_handids) == 0:
             self._update_pager()
-            gui_empty_state.show_no_data(self, context="Hand viewer", db=self.db)
             return
         self._sort_hands(self._sort_column, self._sort_order)
 
-    def _sort_hands(self, column, order) -> None:
-        if column < 0:
-            return
-        self._sort_column, self._sort_order = column, order
+    def _sort_hands(self, column, order) -> bool:
+        if column < 0 or self._page_loading:
+            return False
         if not self.all_handids:
-            return
+            self._sort_column, self._sort_order = column, order
+            return True
+        previous = (self._sort_column, self._sort_order, self.page, list(self.all_handids))
         from fpdb_3_legacy.hand_table_sort import load_sort_keys
 
         name = next(key for key, index in self.colnum.items() if index == column)
         if name not in self._sort_keys:
             heroes = {site: self.config.get_hero_aliases(site) or [hero]
                       for site, hero in self.filters.getHeroes().items()}
-            keys = load_sort_keys(self.db, self.all_handids, name, heroes)
+            try:
+                keys = load_sort_keys(self.db, self._loaded_handids, name, heroes)
+            except Exception as error:  # noqa: BLE001 - DB-driver errors must leave the current table usable.
+                self._set_hand_status(_("Could not sort hands: ") + str(error))
+                self._restore_sort_indicator()
+                return False
             if keys is None:
-                # Uncommon action/combo columns require reconstructed hand data.
-                # Build only their sort values once, without changing the visible page.
-                keys = {}
-                visible_model = self.model
-                scratch = QStandardItemModel()
-                try:
-                    self.model = scratch
-                    for handid in self.all_handids:
-                        hand = self.hands.get(handid)
-                        if hand is None:
-                            hand = self.importhand(handid)
-                        self.addHandRow(handid, hand)
-                        item = scratch.item(0, column)
-                        keys[handid] = item.text() if item is not None else ""
-                        scratch.removeRows(0, scratch.rowCount())
-                finally:
-                    self.model = visible_model
-                    scratch.deleteLater()
+                keys = self._reconstructed_sort_keys(column)
+                if keys is None:
+                    self._restore_sort_indicator()
+                    return False
             self._sort_keys[name] = keys
+        self._sort_column, self._sort_order = column, order
         keys = self._sort_keys[name]
         self.all_handids.sort(key=lambda handid: (keys.get(handid, ""), handid),
                               reverse=order == Qt.SortOrder.DescendingOrder)
         self.page = 0
-        self.render_page()
+        if not self.render_page():
+            self._sort_column, self._sort_order, self.page, self.all_handids = previous
+            self._restore_sort_indicator()
+            self._update_pager()
+            return False
+        return True
+
+    def _restore_sort_indicator(self) -> None:
+        header = self.view.horizontalHeader()
+        header.blockSignals(True)
+        header.setSortIndicator(self._sort_column, self._sort_order)
+        header.blockSignals(False)
+
+    def _reconstructed_sort_keys(self, column):
+        keys = {}
+        progress = QProgressDialog(_("Sorting hands"), _("Cancel"), 0, len(self._loaded_handids), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(250)
+        self._page_loading = True
+        try:
+            for index, handid in enumerate(self._loaded_handids):
+                if progress.wasCanceled():
+                    self._set_hand_status(_("Sorting canceled. Previous order kept."))
+                    return None
+                try:
+                    hand = self.hands.get(handid) or self.importhand(handid)
+                    items = self._hand_row_items(handid, hand, decorate=False)
+                    keys[handid] = items[column].text() if items else ""
+                except Exception:  # noqa: BLE001 - a damaged hand must not abort the whole sort.
+                    log.exception("Could not build sort value for hand %s", handid)
+                    keys[handid] = ""
+                progress.setValue(index + 1)
+                if index % 25 == 0:
+                    QCoreApplication.processEvents()
+            return keys
+        finally:
+            self._page_loading = False
+            progress.close()
+            progress.deleteLater()
+
+    def _apply_id_search(self) -> None:
+        if self._page_loading:
+            self._search_timer.start()
+            return
+        text = self.handSearch.text().lstrip("#")
+        if text and self._hand_numbers is None:
+            from fpdb_3_legacy.hand_table_sort import load_hand_numbers
+
+            try:
+                self._hand_numbers = load_hand_numbers(self.db, self._loaded_handids)
+            except Exception as error:  # noqa: BLE001 - retain the current table on a search query failure.
+                self._set_hand_status(_("Could not search hands: ") + str(error))
+                self._restore_search_text()
+                return
+        previous, page = list(self.all_handids), self.page
+        self.all_handids = [handid for handid in self._loaded_handids
+                            if not text or text in str(handid) or text in (self._hand_numbers or {}).get(handid, "")]
+        self.page = 0
+        if self.all_handids:
+            if not self._sort_hands(self._sort_column, self._sort_order):
+                self.all_handids, self.page = previous, page
+                self._restore_search_text()
+                self._update_pager()
+                return
+        else:
+            self.model.removeRows(0, self.model.rowCount())
+            self._rendered_page = None
+            self._update_pager()
+            self._set_hand_status(_("No hand IDs match this search."))
+        self._active_search = text
+
+    def _restore_search_text(self) -> None:
+        self._search_timer.stop()
+        self.handSearch.blockSignals(True)
+        self.handSearch.setText(self._active_search)
+        self.handSearch.blockSignals(False)
+
+    def _set_hand_status(self, text: str) -> None:
+        self.handStatusLabel.setText(text)
+        self.handStatusLabel.setVisible(bool(text))
 
     def page_count(self) -> int:
         if not self.all_handids:
             return 1
         return (len(self.all_handids) + self.page_size - 1) // self.page_size
 
-    def render_page(self) -> None:
+    def render_page(self) -> bool:
         """Reconstruct and display only the current page of hands."""
-        self.model.removeRows(0, self.model.rowCount())
+        if self._page_loading:
+            return False
+        self._page_loading = True
+        self.loadButton.setEnabled(False)
+        self.handSearch.setEnabled(False)
+        self.pageSizeCombo.setEnabled(False)
+        self.view.horizontalHeader().setEnabled(False)
+        self.replayButton.setEnabled(False)
+        self._update_pager()
         start = self.page * self.page_size
         page_ids = self.all_handids[start : start + self.page_size]
-        progress = QProgressDialog("Loading hands", "Abort", 0, len(page_ids), self)
+        progress = QProgressDialog(_("Loading hands"), _("Cancel"), 0, len(page_ids), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(250)
         progress.setValue(0)
-        progress.show()
+        previous_cache = self.hands.copy()
+        rows, skipped = [], 0
+        selected = self._selected_hand_id()
         try:
             for idx, handid in enumerate(page_ids):
                 if progress.wasCanceled():
-                    break
+                    self.hands = previous_cache
+                    if self._rendered_page is not None:
+                        self.page = self._rendered_page
+                    self._set_hand_status(_("Loading canceled. Previous page kept.") if self.model.rowCount()
+                                          else _("Loading canceled."))
+                    return False
                 try:
                     if handid not in self.hands:
                         self.hands[handid] = self.importhand(handid)
-                    self.addHandRow(handid, self.hands[handid])
+                    self.hands.move_to_end(handid)
+                    items = self._hand_row_items(handid, self.hands[handid])
+                    if items:
+                        rows.append(items)
+                    else:
+                        skipped += 1
                 except Exception as e:  # noqa: BLE001 - skip a bad hand, keep loading the rest.
                     log.exception(f"Skipping hand {handid}: {e}")
                     self.hands.pop(handid, None)
+                    skipped += 1
                 progress.setValue(idx + 1)
                 if idx % 25 == 0:
                     QCoreApplication.processEvents()
+            self.model.removeRows(0, self.model.rowCount())
+            for items in rows:
+                self.model.appendRow(items)
+            self._rendered_page = self.page
+            self._trim_hand_cache()
+            self.columnControls.resize_to_contents()
+            self._restore_hand_selection(selected)
+            if skipped:
+                self._set_hand_status(_("{0} hands could not be loaded on this page.").format(skipped))
+            elif self.handSearch.text().lstrip("#"):
+                self._set_hand_status(_("{0} matching hands from {1} loaded hands.").format(
+                    len(self.all_handids), len(self._loaded_handids)))
+            else:
+                self._set_hand_status("")
+            return True
         finally:
             progress.close()
-        self.view.resizeColumnsToContents()
-        self._update_pager()
+            progress.deleteLater()
+            self._page_loading = False
+            self.loadButton.setEnabled(True)
+            self.handSearch.setEnabled(True)
+            self.pageSizeCombo.setEnabled(True)
+            self.view.horizontalHeader().setEnabled(True)
+            self.replayButton.setEnabled(self.view.currentIndex().isValid())
+            self._update_pager()
+
+    def _trim_hand_cache(self) -> None:
+        limit = max(300, self.page_size * 3)
+        while len(self.hands) > limit:
+            self.hands.popitem(last=False)
+
+    def _selected_hand_id(self):
+        current = self.view.currentIndex()
+        return current.siblingAtColumn(self.colnum['HandId']).data() if current.isValid() else None
+
+    def _restore_hand_selection(self, handid) -> None:
+        header = self.view.horizontalHeader()
+        column = next((header.logicalIndex(visual) for visual in range(header.count())
+                       if not self.view.isColumnHidden(header.logicalIndex(visual))), 0)
+        chosen = self.filterModel.index(0, column)
+        for row in range(self.model.rowCount()):
+            if self.model.item(row, self.colnum['HandId']).text() == str(handid):
+                chosen = self.filterModel.mapFromSource(self.model.index(row, column))
+                break
+        if chosen.isValid():
+            self.view.setCurrentIndex(chosen)
 
     def refresh_theme(self, colors=None, theme_colors=None) -> None:
         """Redraw cached card icons and financial colours after a palette change."""
@@ -834,23 +1125,64 @@ class GuiHandViewer(QSplitter):
                     break
 
     def _update_pager(self) -> None:
+        self._update_hand_empty_state()
+        self._update_hand_filter_chips()
+        self._update_selected_hand()
+        primary = not bool(self._loaded_handids)
+        if self.loadButton.property("primaryAction") != primary:
+            self.loadButton.setProperty("primaryAction", primary)
+            self.loadButton.style().unpolish(self.loadButton)
+            self.loadButton.style().polish(self.loadButton)
         total = len(self.all_handids)
         pages = self.page_count()
-        self.pageLabel.setText(f"Page {self.page + 1}/{pages}  ·  {total} hands")
-        self.prevPageButton.setEnabled(self.page > 0)
-        self.nextPageButton.setEnabled(self.page < pages - 1)
+        self.pageLabel.setText(_("of {0} pages · {1} shown / {2} hands").format(pages, self.model.rowCount(), total))
+        self.prevPageButton.setEnabled(not self._page_loading and self.page > 0)
+        self.nextPageButton.setEnabled(not self._page_loading and self.page < pages - 1)
+        self.pageSpin.blockSignals(True)
+        self.pageSpin.setRange(1, pages)
+        self.pageSpin.setValue(self.page + 1)
+        self.pageSpin.blockSignals(False)
+        self.pageSpin.setEnabled(not self._page_loading and bool(total))
+
+    def _jump_to_page(self, value) -> None:
+        if not self._page_loading and value - 1 != self.page:
+            self.page = max(0, min(value - 1, self.page_count() - 1))
+            self.render_page()
+
+    def _change_page_size(self) -> None:
+        if self._page_loading:
+            return
+        previous_size, previous_page = self.page_size, self.page
+        selected = self._selected_hand_id()
+        anchor = next((index for index, handid in enumerate(self.all_handids) if str(handid) == str(selected)),
+                      self.page * self.page_size)
+        self.page_size = self.pageSizeCombo.currentData()
+        self.page = min(anchor // self.page_size, self.page_count() - 1)
+        if self.render_page():
+            self.columnControls.settings.setValue("cash-hands/page-size", self.page_size)
+        else:
+            self.page_size, self.page = previous_size, previous_page
+            self.pageSizeCombo.blockSignals(True)
+            self.pageSizeCombo.setCurrentIndex(self.pageSizeCombo.findData(self.page_size))
+            self.pageSizeCombo.blockSignals(False)
+            self._update_pager()
 
     def prev_page(self) -> None:
-        if self.page > 0:
+        if not self._page_loading and self.page > 0:
             self.page -= 1
             self.render_page()
 
     def next_page(self) -> None:
-        if self.page < self.page_count() - 1:
+        if not self._page_loading and self.page < self.page_count() - 1:
             self.page += 1
             self.render_page()
 
     def addHandRow(self, handid, hand) -> None:
+        items = self._hand_row_items(handid, hand)
+        if items:
+            self.model.appendRow(items)
+
+    def _hand_row_items(self, handid, hand, *, decorate=True):
         hero = hand.hero or self.filters.get_hero_for_site(hand.sitename, hand)
         if not hero:
             log.warning(f"Hero not found for site: {hand.sitename}")
@@ -939,6 +1271,7 @@ class GuiHandViewer(QSplitter):
             "SiteHandNo": str(sitehandid),
             "Splash": self._format_splash(splash, splash_won, currency),
         }
+        money_values = {"Won": won, "Bet": bet, "Net": net, "Total Pot": totalpot, "Rake": rake}
 
         ordered = sorted(self.colnum.items(), key=lambda kv: kv[1])
         modelrow = [QStandardItem(str(values.get(name, ""))) for name, _idx in ordered]
@@ -954,17 +1287,19 @@ class GuiHandViewer(QSplitter):
             item = modelrow[idx]
             item.setEditable(False)
             if name == "Street0":
-                item.setData(table_card_icon(self.render_cards(holestr)), Qt.ItemDataRole.DecorationRole)
+                if decorate:
+                    item.setData(table_card_icon(self.render_cards(holestr)), Qt.ItemDataRole.DecorationRole)
                 item.setData("", Qt.ItemDataRole.DisplayRole)
                 item.setData(holestr, Qt.ItemDataRole.UserRole + 1)
             elif name == "Street1-4":
                 flat = " ".join(c for run in board_runs for c in run)
-                item.setData(table_card_icon(self.render_boards(board_runs)), Qt.ItemDataRole.DecorationRole)
+                if decorate:
+                    item.setData(table_card_icon(self.render_boards(board_runs)), Qt.ItemDataRole.DecorationRole)
                 item.setData("", Qt.ItemDataRole.DisplayRole)
                 item.setData(flat, Qt.ItemDataRole.UserRole + 1)
             elif name in ("Bet", "Net", "Won", "Total Pot", "Rake"):
                 try:
-                    item.setData(float(values[name]), Qt.ItemDataRole.UserRole)
+                    item.setData(float(money_values[name]), Qt.ItemDataRole.UserRole)
                 except (TypeError, ValueError):
                     pass
             elif name == "Splash":
@@ -974,9 +1309,9 @@ class GuiHandViewer(QSplitter):
                     pass
             if name in ("Won", "Net"):
                 try:
-                    v = float(values[name])
+                    v = float(money_values[name])
                     currency = str(hand.gametype.get("currency", "USD"))
-                    item.setData(format_currency(v, currency), Qt.ItemDataRole.DisplayRole)
+                    item.setData(format_currency(money_values[name], currency), Qt.ItemDataRole.DisplayRole)
                     item.setForeground(QBrush(win_color if v > 0 else lose_color if v < 0 else neutral))
                 except (TypeError, ValueError):
                     pass
@@ -999,7 +1334,7 @@ class GuiHandViewer(QSplitter):
                 item.setBackground(QBrush(tint))
             item.setToolTip(tip)
 
-        self.model.appendRow(modelrow)
+        return modelrow
 
     _GAME_NAMES = {
         "holdem": "HE",

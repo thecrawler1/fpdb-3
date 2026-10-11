@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Final
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -15,6 +17,9 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +36,7 @@ from fpdb_3_legacy.responsive_layout import (
     labelled_field,
     wrap_in_scroll,
 )
+from fpdb_3_legacy.review_widgets import review_stylesheet
 from fpdb_3_legacy.ring_stats.styles import get_theme_palette
 
 #: Width below which the study list and its detail pane stop fitting side by
@@ -54,7 +60,7 @@ STACK_BELOW_WINDOW_WIDTH = STACK_BELOW_WIDTH + 2 * PAGE_MARGIN
 #: that sit side by side, so the taller of the list and the detail, not their
 #: sum. Below their total the page shows one zone at a time, because a share of
 #: a short window is a context form of three rows.
-ZONE_HEIGHTS: Final[tuple[int, int]] = (357, 213)
+ZONE_HEIGHTS: Final[tuple[int, int]] = (170, 280)
 
 #: The zone the bar opens on: the studies, not the context block. The reader
 #: came for the studies; the block above is how they are narrowed.
@@ -70,12 +76,39 @@ SWITCH_BELOW_HEIGHT = sum(ZONE_HEIGHTS) + ZONE_CHROME_HEIGHT
 
 #: ``(minimum width, columns)`` for the spot cards. Three cards across is the
 #: layout the page was designed for; below that the labels wrap badly.
-CATEGORY_BREAKPOINTS = ((1080, 3), (720, 2))
+CATEGORY_BREAKPOINTS = ((320, 2),)
 
 #: ``(minimum width, columns)`` for the four context fields, and for the
 #: advanced fields folded under "More filters".
 CONTEXT_BREAKPOINTS = ((1000, 4), (700, 2))
 ADVANCED_BREAKPOINTS = ((1000, 3), (680, 2))
+
+
+class StudyRowDelegate(QStyledItemDelegate):
+    """Two-line catalog entries; descriptions stay in the detail pane."""
+
+    def sizeHint(self, option, index):
+        return QSize(240, 66)
+
+    def paint(self, painter, option, index):
+        colors = get_theme_palette()
+        painter.save()
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, QColor(colors['selection']))
+        rect = option.rect.adjusted(14, 9, -14, -8)
+        font = QFont(option.font)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.setPen(QColor(colors['text']))
+        title = painter.fontMetrics().elidedText(str(index.data() or ""), Qt.TextElideMode.ElideRight, rect.width())
+        painter.drawText(rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, title)
+        font.setWeight(QFont.Weight.Normal)
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.setPen(QColor(colors['muted_text']))
+        subtitle = painter.fontMetrics().elidedText(str(index.data(257) or ""), Qt.TextElideMode.ElideRight, rect.width())
+        painter.drawText(rect, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft, subtitle)
+        painter.restore()
 
 
 class GuiStudyExplorer(QWidget):
@@ -112,9 +145,19 @@ class GuiStudyExplorer(QWidget):
 
     def _build_ui(self) -> None:
         colors = get_theme_palette()
+        self.setStyleSheet(review_stylesheet() + f"""
+            QGroupBox {{border:0; background:transparent; padding:0; margin-top:18px;}}
+            QGroupBox::title {{color:{colors['muted_text']}; font-size:12px; font-weight:600;
+                text-transform:none; background:transparent; padding:0;}}
+            QLabel {{background:transparent;}}
+            QListWidget {{background:{colors['base']}; border:1px solid {colors['border']}; border-radius:6px;}}
+            QFrame#studyDetail {{background:{colors['base']}; border:1px solid {colors['border']}; border-radius:8px;}}
+            QPushButton[studyCategory='true'] {{font-size:11px; padding:6px 8px; text-transform:none;
+                min-width:0; min-height:0; font-weight:500;}}
+        """)
         muted = colors.get("muted_text", "#a0aec0")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(PAGE_MARGIN, 14, PAGE_MARGIN, 14)
+        layout.setContentsMargins(PAGE_MARGIN, 12, PAGE_MARGIN, 12)
 
         # The page is two blocks: what the reader is looking for, and the
         # studies themselves. Only the second one grows, and the first is a zone
@@ -124,11 +167,11 @@ class GuiStudyExplorer(QWidget):
         # exists -- below the fold.
         upper = QWidget()
         upper_layout = QVBoxLayout(upper)
+        self.upper_content_layout = upper_layout
+        self._categories_in_filters = False
         upper_layout.setContentsMargins(0, 0, 0, 0)
-        self._build_header(upper_layout, muted)
+        self._build_header(layout, muted)
         upper_layout.addWidget(self._build_context_box(muted))
-        upper_layout.addWidget(self._build_categories_box())
-        upper_layout.addWidget(self._build_recent_box())
         self.upper_area = wrap_in_scroll(upper)
 
         self.splitter = self._build_studies_splitter(muted)
@@ -144,7 +187,7 @@ class GuiStudyExplorer(QWidget):
         self.pane_switcher = PaneSwitcher(
             self,
             self.splitter,
-            [self.upper_area, self.study_list, self.study_detail],
+            [self.upper_area, self.library_pane, self.study_detail],
             ("Filters", "Studies", "Detail"),
             sizes=(360, 620),
         )
@@ -177,6 +220,7 @@ class GuiStudyExplorer(QWidget):
         # only records them, and a widget that is never shown would otherwise
         # keep an empty grid.
         self._reflow(self.width())
+        self._sync_zones()
 
     def showEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         super().showEvent(event)
@@ -199,7 +243,19 @@ class GuiStudyExplorer(QWidget):
         that has since grown wide enough for both panes again.
         """
         switching = self.width() < STACK_BELOW_WINDOW_WIDTH or self.height() < SWITCH_BELOW_HEIGHT
+        self.subtitle_label.setVisible(not switching)
+        if switching != self._categories_in_filters:
+            source = self.library_layout if switching else self.upper_content_layout
+            target = self.upper_content_layout if switching else self.library_layout
+            source.removeWidget(self.category_box)
+            if switching:
+                target.addWidget(self.category_box)
+            else:
+                target.insertWidget(0, self.category_box)
+            self.category_box.show()
+            self._categories_in_filters = switching
         self.pane_switcher.set_switching(switching)
+        self.upper_area.setMinimumHeight(0 if switching else 170)
         cap_context_block(self.upper_area, self, capped=not switching)
 
     def _reveal_detail(self, _item: QListWidgetItem) -> None:
@@ -214,24 +270,27 @@ class GuiStudyExplorer(QWidget):
         self.pane_switcher.set_active(2)
 
     def _build_header(self, upper_layout: QVBoxLayout, muted: str) -> None:
-        title = QLabel("Research · Study Explorer")
+        title = QLabel("Study Explorer")
         title.setStyleSheet("font-size: 20px; font-weight: bold;")
         upper_layout.addWidget(title)
-        subtitle = QLabel("What do you want to study? Choose a poker spot first; the panels share its population.")
+        subtitle = QLabel("Choose a poker situation, review the study, then open its analysis.")
+        self.subtitle_label = subtitle
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color: {muted}; font-size: 12px;")
         upper_layout.addWidget(subtitle)
 
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Search studies"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Try: c-bet, 3bet, BB defend, opening range…")
+        self.search_edit.setMaximumWidth(560)
+        self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._refresh_studies)
         search_row.addWidget(self.search_edit, 1)
+        search_row.addStretch()
         upper_layout.addLayout(search_row)
 
     def _build_context_box(self, muted: str) -> QGroupBox:
-        context = QGroupBox("Context (applied when you open a study)")
+        context = QGroupBox("Analysis context")
         context_layout = QVBoxLayout(context)
 
         self.game_combo = QComboBox()
@@ -354,7 +413,16 @@ class GuiStudyExplorer(QWidget):
 
     def _build_studies_splitter(self, muted: str) -> ResponsiveSplitter:
         splitter = ResponsiveSplitter()
+        self.library_pane = QWidget()
+        library_layout = QVBoxLayout(self.library_pane)
+        self.library_layout = library_layout
+        library_layout.setContentsMargins(0, 0, 12, 0)
+        library_layout.setSpacing(12)
+        library_layout.addWidget(self._build_categories_box())
+        self.library_count = QLabel("Studies")
+        library_layout.addWidget(self.library_count)
         self.study_list = QListWidget()
+        self.study_list.setItemDelegate(StudyRowDelegate(self.study_list))
         # Narrow enough to share a laptop width with the detail pane; the pane
         # is stacked below this list before the titles stop being readable.
         self.study_list.setMinimumWidth(240)
@@ -364,11 +432,22 @@ class GuiStudyExplorer(QWidget):
         # selection signal itself is not the trigger.
         self.study_list.itemClicked.connect(self._reveal_detail)
         self.study_list.itemActivated.connect(self._reveal_detail)
-        splitter.addWidget(self.study_list)
+        library_layout.addWidget(self.study_list, 1)
+        self.recent_box = self._build_recent_box()
+        library_layout.addWidget(self.recent_box)
+        splitter.addWidget(self.library_pane)
+        splitter.addWidget(self._build_study_detail(muted))
+        splitter.setSizes([400, 720])
+        return splitter
 
-        detail = QWidget()
+    def _build_study_detail(self, muted: str) -> QWidget:
+        detail = QFrame()
+        detail.setObjectName("studyDetail")
         self.study_detail = detail
         detail_layout = QVBoxLayout(detail)
+        detail_layout.setContentsMargins(24, 22, 24, 20)
+        detail_layout.setSpacing(12)
+        detail.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.breadcrumb_label = QLabel("")
         self.breadcrumb_label.setStyleSheet(f"color: {muted}; font-size: 11px;")
         detail_layout.addWidget(self.breadcrumb_label)
@@ -383,23 +462,28 @@ class GuiStudyExplorer(QWidget):
         self.study_meta.setWordWrap(True)
         self.study_meta.setStyleSheet(f"color: {muted};")
         detail_layout.addWidget(self.study_meta)
+        panels_caption = QLabel("What you'll review")
+        panels_caption.setStyleSheet(f"color:{muted}; font-size:12px; font-weight:600;")
+        detail_layout.addWidget(panels_caption)
+        self.study_panels = QLabel()
+        self.study_panels.setWordWrap(True)
+        detail_layout.addWidget(self.study_panels)
         self.availability_label = QLabel("")
         self.availability_label.setWordWrap(True)
         detail_layout.addWidget(self.availability_label)
         detail_layout.addStretch(1)
         actions = QHBoxLayout()
-        self.favorite_button = QPushButton("☆ Favorite")
+        self.favorite_button = QPushButton("Favorite")
         self.favorite_button.clicked.connect(self._toggle_favorite)
         self.open_button = QPushButton("Open study")
+        self.open_button.setProperty("primaryAction", True)
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self._open_selected)
         actions.addWidget(self.favorite_button)
         actions.addWidget(self.open_button)
         actions.addStretch(1)
         detail_layout.addLayout(actions)
-        splitter.addWidget(detail)
-        splitter.setSizes([360, 620])
-        return splitter
+        return detail
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         """Reflow the grids for the new width, and follow the new shape."""
@@ -415,7 +499,7 @@ class GuiStudyExplorer(QWidget):
         self.context_grid.reflow(column_count(width, CONTEXT_BREAKPOINTS))
         self.advanced_grid.reflow(column_count(width, ADVANCED_BREAKPOINTS))
         if self.category_grid.items():
-            self.category_grid.reflow(column_count(width, CATEGORY_BREAKPOINTS))
+            self.category_grid.reflow(column_count(self.library_pane.width(), CATEGORY_BREAKPOINTS))
 
     def _refresh_advanced_summary(self) -> None:
         """Say what the folded "More filters" section currently holds."""
@@ -430,7 +514,7 @@ class GuiStudyExplorer(QWidget):
         end = self.date_to_edit.text().strip()
         if start or end:
             parts.append(f"dates {start or '…'} to {end or '…'}")
-        self.advanced_fields.set_summary(" · ".join(parts) if parts else "none set")
+        self.advanced_fields.set_summary(" · ".join(parts) if parts else "Optional")
 
     def _refresh_categories(self) -> None:
         # Reparent before deleting: ``deleteLater`` alone leaves the old buttons
@@ -442,15 +526,18 @@ class GuiStudyExplorer(QWidget):
         buttons: list[QWidget] = []
         for category in self.model.categories(self._game(), self._tournament()):
             button = QPushButton(f"{category.label}\n{category.study_count} studies")
+            button.setProperty("studyCategory", True)
             button.setToolTip(category.description)
-            button.setMinimumHeight(54)
+            button.setMinimumHeight(42)
+            button.setCheckable(True)
+            button.setChecked(category.id == self._category_id)
             button.setEnabled(category.study_count > 0)
             if not category.study_count:
                 button.setToolTip(f"{category.description}\nNo study covers this spot for the chosen game.")
             button.clicked.connect(lambda _checked=False, category_id=category.id: self._choose_category(category_id))
             buttons.append(button)
         self.category_grid.set_items(buttons)
-        self.category_grid.reflow(column_count(self.width(), CATEGORY_BREAKPOINTS))
+        self.category_grid.reflow(column_count(self.library_pane.width(), CATEGORY_BREAKPOINTS))
 
     def _game(self) -> str | None:
         """The game currently chosen, or ``None`` for every game."""
@@ -470,7 +557,8 @@ class GuiStudyExplorer(QWidget):
         self._refresh_studies()
 
     def _choose_category(self, category_id: str) -> None:
-        self._category_id = category_id
+        self._category_id = None if self._category_id == category_id else category_id
+        self._refresh_categories()
         self._refresh_studies()
 
     def _refresh_studies(self) -> None:
@@ -482,8 +570,9 @@ class GuiStudyExplorer(QWidget):
         for study in studies:
             item = QListWidgetItem(study.title)
             item.setData(256, study.id)
-            item.setToolTip(study.description)
+            item.setData(257, f"{len(study.panels)} panels · {study.min_sample or 0} decision minimum")
             self.study_list.addItem(item)
+        self.library_count.setText(f"{len(studies)} studies available")
         if studies:
             index = next((index for index, study in enumerate(studies) if study.id == selected_id), 0)
             self.study_list.setCurrentRow(index)
@@ -496,6 +585,7 @@ class GuiStudyExplorer(QWidget):
         self.study_title.setText("No matching studies")
         self.study_description.setText("Try a poker term such as c-bet, 3bet, BB defend or opening range.")
         self.study_meta.setText("")
+        self.study_panels.setText("")
         self.availability_label.setText("")
         self.open_button.setEnabled(False)
 
@@ -551,23 +641,19 @@ class GuiStudyExplorer(QWidget):
         self.breadcrumb_label.setText("  ›  ".join(self.model.breadcrumbs(study)))
         self.study_title.setText(study.title)
         self.study_description.setText(study.description)
-        panel_names = ", ".join(panel.title for panel in study.panels[:5])
-        if len(study.panels) > 5:
-            panel_names += f" and {len(study.panels) - 5} more"
         self.study_meta.setText(
-            f"{study.min_sample or 'No'} decision minimum · {len(study.panels)} panels\n"
-            f"{panel_names}\n"
-            f"Tags: {', '.join(study.tags)}",
+            f"{study.min_sample or 'No'} decision minimum · {len(study.panels)} panels",
         )
+        self.study_panels.setText("\n".join("• " + panel.title for panel in study.panels))
         if selection is not None and not selection.available:
             self.availability_label.setText(f"Unavailable: {selection.unavailable_reason}")
             self.availability_label.setStyleSheet("color: #e06c75; font-weight: bold;")
             self.open_button.setEnabled(False)
         else:
-            self.availability_label.setText("Ready. The selected context will be inherited by every panel.")
-            self.availability_label.setStyleSheet("color: #98c379;")
+            self.availability_label.setText("Ready to open · uses the context selected above")
+            self.availability_label.setStyleSheet(f"color:{get_theme_palette()['muted_text']};")
             self.open_button.setEnabled(True)
-        self.favorite_button.setText("★ Favorite" if self.model.is_favorite(study.id) else "☆ Favorite")
+        self.favorite_button.setText("Remove favorite" if self.model.is_favorite(study.id) else "Favorite")
 
     def _open_selected(self) -> None:
         if self._selected is None:
@@ -595,6 +681,7 @@ class GuiStudyExplorer(QWidget):
             item = QListWidgetItem(study.title)
             item.setData(256, study.id)
             self.recent_list.addItem(item)
+        self.recent_box.setVisible(bool(self.recent_list.count()))
 
     def _on_recent_changed(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         if current is None:

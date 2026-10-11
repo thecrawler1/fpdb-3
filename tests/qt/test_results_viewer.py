@@ -1,18 +1,59 @@
 """Real imported cash data, parameterized worker queries and results navigation."""
 
 import ast
+import csv
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QDate, QObject, QSettings, Qt, Signal
 from PySide6.QtWidgets import QComboBox
 
 from fpdb_3_legacy.GuiResultsViewer import GuiResultsViewer
 from fpdb_3_legacy.period_results import parse_result_rows
 
 pytestmark = pytest.mark.qt
+
+
+class ControlledWorker(QObject):
+    finished = Signal(str, list, list)
+    error = Signal(str)
+
+    def __init__(self, db, name, sql, params):
+        super().__init__()
+        self.name, self.sql, self.params = name, sql, params
+
+    def start(self):
+        pass
+
+    def isFinished(self):
+        return False
+
+    def wait(self):
+        return True
+
+
+@pytest.fixture
+def controlled_results(monkeypatch, report):
+    import fpdb_3_legacy.GuiResultsViewer as module
+
+    monkeypatch.setattr(module, "DbWorker", ControlledWorker)
+    return report
+
+
+@pytest.fixture
+def hand_review(report, qtbot, tmp_path):
+    from fpdb_3_legacy.GuiHandViewer import GuiHandViewer
+
+    viewer = GuiHandViewer(report.conf, report.db.sql, None)
+    viewer.columnControls.settings = QSettings(str(tmp_path / "review.ini"), QSettings.Format.IniFormat)
+    qtbot.addWidget(viewer)
+    viewer.page_size = 1
+    viewer.reload_hands([hand.hand_id for hand in report.raw_hands])
+    yield viewer
+    viewer.close_owned_database()
 
 
 @pytest.fixture
@@ -228,13 +269,14 @@ def test_refresh_ignores_obsolete_workers_and_closing_keeps_borrowed_db(report, 
             return True
 
     monkeypatch.setattr(module, "DbWorker", Worker)
+    original = report.raw_hands
     report.refresh()
     old = report._workers[-1]
     report.refresh()
     new = report._workers[-1]
     rows = [(77, datetime.now(timezone.utc), 100, 50, 10, 1, 1, 0, 1, False, "holdem", "nl")]
     old.finished.emit(old.name, rows, [])
-    assert not report.raw_hands
+    assert report.raw_hands == original
     new.finished.emit(new.name, rows, [])
     assert len(report.raw_hands) == 1
     old.error.emit("obsolete failure")
@@ -245,6 +287,289 @@ def test_refresh_ignores_obsolete_workers_and_closing_keeps_borrowed_db(report, 
     cursor.execute("SELECT COUNT(*) FROM Hands")
     assert cursor.fetchone()[0] == 3
     cursor.close()
+
+
+def test_custom_date_edits_are_debounced_and_invalid_ranges_do_not_query(controlled_results, qtbot):
+    report = controlled_results
+    report.interval_combo.setCurrentIndex(report.interval_combo.findData("custom"))
+    before = len(report._workers)
+    day = report.raw_hands[0].timestamp.date()
+    report.from_date.setDate(QDate(day.year, day.month, day.day))
+    report.to_date.setDate(QDate(day.year, day.month, day.day + 1))
+    qtbot.waitUntil(lambda: len(report._workers) == before + 1, timeout=2000)
+    worker = report._workers[-1]
+    assert worker.params[1].startswith(day.isoformat())
+    assert worker.params[2].startswith((day + timedelta(days=2)).isoformat())
+    before = len(report._workers)
+    original = report.raw_hands
+    report.from_date.setDate(report.to_date.date().addDays(1))
+    qtbot.wait(400)
+    assert len(report._workers) == before
+    assert report.raw_hands == original
+    assert "Start date" in report.status.text()
+    assert not report.export_button.isEnabled()
+
+
+def test_failed_refresh_preserves_results_and_error_until_success(controlled_results):
+    report = controlled_results
+    original, original_count = report.raw_hands, report.model.rowCount()
+    report.refresh()
+    assert report.raw_hands == original and report.model.rowCount() == original_count
+    assert not report.hands_button.isEnabled() and not report.export_button.isEnabled()
+    report._workers[-1].error.emit("connection unavailable")
+    assert report.raw_hands == original
+    report.group_combo.setCurrentIndex(report.group_combo.findData("week"))
+    assert "connection unavailable" in report.status.text()
+    report.refresh()
+    worker = report._workers[-1]
+    worker.finished.emit(worker.name, [(77, datetime.now(timezone.utc), 100, 50, 10, 1, 1, 0, 1, False, "holdem", "nl")], [])
+    assert report._results_current
+    assert report.raw_hands[0].hand_id == 77
+    assert "unavailable" not in report.status.text()
+    assert report.export_button.isEnabled()
+
+
+def test_csv_exports_all_filtered_periods_in_table_order_with_exact_total(report, tmp_path):
+    report.table.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+    path = tmp_path / "résultats.csv"
+    assert report.export_csv(str(path))
+    with path.open(encoding="utf-8-sig", newline="") as source:
+        rows = list(csv.DictReader(source))
+    assert len(rows) == 3
+    assert rows[0]['Hands'] == "2" and rows[1]['Hands'] == "1"
+    assert rows[-1]['Period'] == "Total"
+    assert sum(Decimal(row['Profit (USD)']) for row in rows[:-1]) == Decimal(rows[-1]['Profit (USD)']) == -24
+    assert Decimal(rows[-1]['EV (USD)']) == -24
+    assert rows[-1]['Hands with valid BB'] == "3"
+    assert rows[-1]['Start'] == rows[-1]['End'] == ""
+    assert not report.export_csv(str(tmp_path / "missing" / "results.csv"))
+    assert "Could not export" in report.status.text()
+
+
+def test_total_columns_follow_reordered_results_columns(report):
+    header = report.table.horizontalHeader()
+    header.moveSection(header.visualIndex(4), 0)
+    assert report.total_table.horizontalHeader().logicalIndex(0) == 4
+    assert report.total_table.columnWidth(4) == report.table.columnWidth(4)
+
+
+def test_hand_id_search_covers_unseen_pages_and_clear_restores_population(hand_review, qtbot):
+    viewer = hand_review
+    original = set(viewer.all_handids)
+    viewer.handSearch.setText("#2810000001")
+    qtbot.waitUntil(lambda: len(viewer.all_handids) == 1, timeout=2000)
+    assert int(viewer.filterModel.index(0, viewer.colnum['SiteHandNo']).data()) == 2810000001
+    viewer.handSearch.setText("999999999999")
+    qtbot.waitUntil(lambda: not viewer.all_handids, timeout=2000)
+    assert viewer.model.rowCount() == 0 and not viewer.pageSpin.isEnabled()
+    viewer.handSearch.clear()
+    qtbot.waitUntil(lambda: set(viewer.all_handids) == original, timeout=2000)
+    assert viewer.model.rowCount() == 1
+
+
+def test_direct_page_navigation_and_page_size_preserve_current_data(hand_review):
+    viewer = hand_review
+    viewer.pageSpin.setValue(3)
+    assert viewer.page == 2
+    assert int(viewer.filterModel.index(0, viewer.colnum['HandId']).data()) == viewer.all_handids[2]
+    viewer.pageSizeCombo.setCurrentIndex(viewer.pageSizeCombo.findData(25))
+    assert viewer.page_size == 25 and viewer.page == 0
+    assert viewer.model.rowCount() == 3
+    assert viewer.columnControls.settings.value("cash-hands/page-size", type=int) == 25
+
+
+def test_hand_cache_is_bounded_and_recent_pages_are_reused(hand_review, monkeypatch):
+    viewer = hand_review
+    sample = next(iter(viewer.hands.values()))
+    imported = []
+
+    def import_hand(handid):
+        imported.append(handid)
+        return sample
+
+    monkeypatch.setattr(viewer, "importhand", import_hand)
+    viewer.page_size = 50
+    viewer.reload_hands(range(1000, 1350))
+    for _ in range(6):
+        viewer.next_page()
+    assert len(viewer.hands) == 300 and len(viewer.all_handids) == 350
+    before = len(imported)
+    viewer.prev_page()
+    assert len(imported) == before
+    viewer.pageSpin.setValue(1)
+    assert len(imported) == before + 50 and len(viewer.hands) == 300
+
+
+def test_cancelled_page_loading_keeps_previous_rows_page_and_selection(hand_review, monkeypatch):
+    import fpdb_3_legacy.GuiHandViewer as module
+
+    class CanceledProgress:
+        def __init__(self, *_args):
+            pass
+
+        def wasCanceled(self):
+            return True
+
+        def __getattr__(self, _name):
+            return lambda *_args: None
+
+    viewer = hand_review
+    selected = viewer._selected_hand_id()
+    before = list(viewer.hands)
+    monkeypatch.setattr(module, "QProgressDialog", CanceledProgress)
+    viewer.next_page()
+    assert viewer.page == 0
+    assert viewer._selected_hand_id() == selected
+    assert list(viewer.hands) == before
+    assert viewer.model.rowCount() == 1 and not viewer._page_loading
+    assert "canceled" in viewer.handStatusLabel.text()
+    assert viewer.loadButton.isEnabled() and viewer.nextPageButton.isEnabled()
+    previous_order = list(viewer.all_handids)
+    previous_sort = viewer._sort_column, viewer._sort_order
+    viewer.view.sortByColumn(viewer.colnum['HandId'], Qt.SortOrder.AscendingOrder)
+    assert viewer.all_handids == previous_order
+    assert (viewer._sort_column, viewer._sort_order) == previous_sort
+    assert viewer.view.horizontalHeader().sortIndicatorSection() == previous_sort[0]
+
+
+def test_bad_hand_is_reported_without_aborting_other_rows(hand_review, monkeypatch):
+    viewer = hand_review
+    original = viewer.importhand
+    broken = viewer.all_handids[1]
+
+    def import_hand(handid):
+        if handid == broken:
+            raise ValueError("damaged hand")
+        return original(handid)
+
+    monkeypatch.setattr(viewer, "importhand", import_hand)
+    viewer.page_size = 3
+    viewer.render_page()
+    assert viewer.model.rowCount() == 2
+    assert "1 hands could not be loaded" in viewer.handStatusLabel.text()
+    assert viewer.replayButton.isEnabled()
+
+
+def test_monetary_roles_never_parse_localized_display_strings(hand_review, monkeypatch):
+    import fpdb_3_legacy.GuiHandViewer as module
+    from fpdb_3_legacy.localized_formats import format_currency
+
+    viewer = hand_review
+    handid = viewer.all_handids[0]
+    hand = viewer.hands[handid]
+    monkeypatch.setattr(module, "format_number", lambda _value: "1.234,50")
+    items = viewer._hand_row_items(handid, hand)
+    net = hand.net_collected[hand.hero]
+    item = items[viewer.colnum['Net']]
+    assert item.data(Qt.ItemDataRole.UserRole) == float(net)
+    assert item.text() == format_currency(net, hand.gametype['currency'])
+    assert item.foreground().color().name() == module.current_palette()['danger']
+    assert items[viewer.colnum['Total Pot']].data(Qt.ItemDataRole.UserRole) == float(hand.totalpot)
+
+
+def test_visible_grouping_and_unit_segments_share_the_existing_state(report):
+    report.group_segments.buttons[1].click()
+    assert report.group_combo.currentData() == "week" and len(report.periods) == 1
+    assert report.total.profit == -2400
+    report.group_combo.setCurrentIndex(report.group_combo.findData("month"))
+    assert report.group_segments.buttons[2].isChecked()
+    report.units_segments.buttons[1].click()
+    assert report.units_combo.currentData() is True
+    assert report.graph.getAxis("left").labelText == "BB"
+    assert not report.graph.getAxis("left").autoSIPrefix
+
+
+def test_small_currency_values_are_not_displayed_as_milli_dollars(report):
+    axis = report.graph.getAxis("left")
+    axis.setRange(-.5, .5)
+    assert axis.autoSIPrefixScale == 1
+    assert float(axis.tickStrings([.2], axis.autoSIPrefixScale * axis.scale, .1)[0]) == .2
+
+
+def test_collapsed_filters_remain_visible_and_clear_only_once(report, monkeypatch):
+    report.game_combo.setCurrentIndex(1)
+    assert report.game_combo.currentText() == "Hold'em"
+    report.limit_combo.setCurrentIndex(1)
+    assert not report.more_filters.isChecked()
+    assert not report.active_filters.isHidden()
+    assert "(2)" in report.more_filters.text()
+    rebuilt = []
+    original = report._rebuild_table
+
+    def rebuild():
+        rebuilt.append(True)
+        original()
+
+    monkeypatch.setattr(report, "_rebuild_table", rebuild)
+    report.active_filters.clear_button.click()
+    assert report.game_combo.currentData() is report.limit_combo.currentData() is None
+    assert report.active_filters.isHidden()
+    assert rebuilt == [True]
+
+
+def test_inline_empty_filters_offer_a_working_recovery_action(report):
+    report.game_combo.addItem("Absent game", "absent")
+    report.game_combo.setCurrentIndex(report.game_combo.count() - 1)
+    assert not report.empty_state.isHidden()
+    assert report.graph_panel.isHidden()
+    assert report.total_table.isHidden()
+    report.empty_state.action.click()
+    assert report.total.profit == -2400 and report.model.rowCount() == 2
+    assert report.empty_state.isHidden() and not report.graph_panel.isHidden()
+
+
+def test_all_periods_has_an_explicit_button_and_period_changes_fit_the_chart(report, qtbot):
+    report.all_periods_button.click()
+    assert report.selection == "total" and report.all_periods_button.isChecked()
+    assert "All periods" in report.selection_label.text()
+    assert report.graph.listDataItems()[0].getData()[1][-1] == -24
+    report.graph.getViewBox().setRange(xRange=(100, 110), yRange=(100, 110), padding=0)
+    index = report.proxy.index(0, 0)
+    qtbot.mouseClick(report.table.viewport(), Qt.MouseButton.LeftButton, pos=report.table.visualRect(index).center())
+    assert not report.all_periods_button.isChecked()
+    assert report.graph.getViewBox().viewRange()[0][1] < 10
+
+
+def test_empty_database_import_action_emits_navigation_request(qtbot, fresh_db, legacy_config):
+    widget = GuiResultsViewer(legacy_config, db=fresh_db, autoload=False)
+    qtbot.addWidget(widget)
+    assert not widget.empty_state.isHidden()
+    assert "Import" in widget.empty_state.title.text()
+    with qtbot.waitSignal(widget.import_requested):
+        widget.empty_state.action.click()
+    widget.close()
+
+
+def test_hand_footer_tracks_selection_and_empty_search_can_be_cleared(hand_review, qtbot):
+    viewer = hand_review
+    viewer.next_page()
+    site_id = viewer.filterModel.index(0, viewer.colnum['SiteHandNo']).data()
+    assert str(site_id) in viewer.selectedHandLabel.text()
+    assert "Net" in viewer.selectedHandDetails.text()
+    assert viewer.replayButton.parentWidget() is viewer.selectionBar
+    viewer.handSearch.setText("999999999999")
+    qtbot.waitUntil(lambda: not viewer.all_handids, timeout=2000)
+    assert not viewer.empty_state.isHidden()
+    viewer.empty_state.action.click()
+    qtbot.waitUntil(lambda: len(viewer.all_handids) == 3, timeout=2000)
+    assert viewer.empty_state.isHidden()
+
+
+def test_hand_feature_names_and_chips_are_understandable_and_removable(hand_review, monkeypatch):
+    viewer = hand_review
+    loads = []
+    monkeypatch.setattr(viewer, "loadHands", lambda _checked: loads.append(True))
+    viewer.filtersButton.setChecked(True)
+    assert viewer.flagFilters.parentWidget() is viewer.filterPanel
+    assert viewer.flagAllIn.text() == "All-in"
+    viewer.flagAllIn.setChecked(True)
+    viewer.flagShowdown.setChecked(True)
+    chip = viewer.active_hand_filters.buttons['features']
+    assert "All-in" in chip.text() and "Showdown" in chip.text()
+    before = len(loads)
+    chip.click()
+    assert not viewer.flagAllIn.isChecked() and not viewer.flagShowdown.isChecked()
+    assert len(loads) == before + 1
 
 
 def test_results_hand_link_reuses_existing_viewer_and_opens_one_if_needed():

@@ -41,6 +41,11 @@ class ProfitGraphWidget(pg.PlotWidget):
         self.getAxis("bottom").setPen(axis_pen)
         self.getAxis("left").setTextPen(pg.mkPen(color=text_color))
         self.getAxis("bottom").setTextPen(pg.mkPen(color=text_color))
+        left = self.getAxis("left")
+        if hasattr(left, "setSIPrefixEnableRanges"):
+            # PyQtGraph 0.14 also consults these ranges when the prefix is disabled.
+            left.setSIPrefixEnableRanges(())
+        left.enableAutoSIPrefix(False)
 
     def plot_profit_data(self, profits: tuple[np.ndarray, ...] | list[float], hands: list[int], *,
                          units: str | None = None, title: str | None = None, show_all_lines: bool = False) -> None:

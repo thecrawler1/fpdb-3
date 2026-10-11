@@ -519,13 +519,13 @@ def test_study_explorer_reflows_its_fields_and_stacks_its_panes(qtbot, tmp_path)
     explorer.resize(1280, 720)
     process(app)
     assert explorer.context_grid.columns() == 4
-    assert explorer.category_grid.columns() == 3
+    assert explorer.category_grid.columns() == 2
     assert explorer.splitter.is_stacked() is False
 
     explorer.resize(660, 640)
     process(app)
     assert explorer.context_grid.columns() == 1
-    assert explorer.category_grid.columns() == 1
+    assert explorer.category_grid.columns() == 2
     assert explorer.splitter.is_stacked() is True
 
 

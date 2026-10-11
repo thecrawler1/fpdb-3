@@ -159,7 +159,7 @@ def application_stylesheet(colors: dict[str, str]) -> str:
     QComboBox QAbstractItemView::item:selected {{ background: {colors['selection']}; color: {colors['text']}; }}
     QGroupBox {{ border: 1px solid {colors['border']}; background: {colors['panel']}; border-radius: 6px; }}
     QGroupBox::title {{ color: {colors['muted_text']}; font-weight: 600; }}
-    QCheckBox::indicator {{ width: 18px; height: 18px; background: {colors['input']}; border: 1px solid {colors['control_border']}; border-radius: 3px; image: none; }}
+    QCheckBox::indicator, QCheckBox::indicator:unchecked {{ width: 18px; height: 18px; background: {colors['input']}; border: 1px solid {colors['control_border']}; border-radius: 3px; image: none; }}
     QCheckBox::indicator:checked {{ background: {colors['accent']}; border-color: {colors['accent']}; image: url('{assets}/{check}'); }}
     QMenu::indicator {{ width: 18px; height: 18px; border:1px solid {colors['control_border']}; border-radius:3px; background:{colors['input']}; image:none; }}
     QMenu::indicator:checked {{ background:{colors['accent']}; border-color:{colors['accent']}; image:url('{assets}/{check}'); }}
@@ -169,6 +169,17 @@ def application_stylesheet(colors: dict[str, str]) -> str:
     QProgressBar {{ background: {colors['panel']}; border: 1px solid {colors['border']}; border-radius: 4px; text-align: center; }}
     QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{ background: {colors['control_border']}; }}
     QScrollBar::handle:hover {{ background: {colors['accent']}; }}
+    QScrollBar:vertical {{ width:8px; background:transparent; border:0; margin:0; }}
+    QScrollBar:horizontal {{ height:8px; background:transparent; border:0; margin:0; }}
+    QScrollBar::handle:vertical {{ min-height:24px; border-radius:4px; }}
+    QScrollBar::handle:horizontal {{ min-width:24px; border-radius:4px; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; border:0; background:none; }}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width:0; border:0; background:none; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background:none; }}
+    QSplitter::handle {{background:transparent; image:none; border:0;}}
+    QSplitter::handle:horizontal {{width:8px;}}
+    QSplitter::handle:vertical {{height:8px;}}
+    QSplitter::handle:hover {{background:{colors['panel_alt']};}}
     {STYLE_MARKER}
     """
 
@@ -246,8 +257,10 @@ class DesignPolish(QObject):
         ))
         # The native menu delegate also reserves a checkmark gutter (in addition
         # to stylesheet padding), which sizeHintForColumn can omit entirely.
-        width = max(combo.width(), content_width + 64 + view.verticalScrollBar().sizeHint().width())
         popup = view.window()
+        margins = popup.contentsMargins()
+        chrome = 2 * view.frameWidth() + margins.left() + margins.right()
+        width = max(combo.width(), content_width + 64 + chrome + view.verticalScrollBar().sizeHint().width())
         screen = combo.screen().availableGeometry()
         width = min(width, screen.width())
         view.setTextElideMode(Qt.TextElideMode.ElideNone)

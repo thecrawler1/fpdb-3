@@ -499,18 +499,19 @@ class ThemeManager:
 
         return f"""
             QWidget {{
-                background-color: {sidebar};
+                background-color: transparent;
                 color: {text};
-                font-size: 13px;
+                font-size: 12px;
             }}
+            QWidget#analysisFilters {{ background-color: {sidebar}; }}
 
             /* Cadres et Groupes */
             QGroupBox {{
-                border: 1px solid {border_rgba};
-                border-radius: 8px;
-                padding: 16px 12px 12px 12px;
-                background-color: {card};
-                margin-top: 10px;
+                border: 0;
+                border-radius: 0;
+                padding: 0;
+                background-color: transparent;
+                margin: 0;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
@@ -526,24 +527,21 @@ class ThemeManager:
                 margin-left: 8px;
             }}
             QGroupBox:hover {{
-                border-color: {accent_hover}2b;
-                background-color: {card_hover};
+                background-color: transparent;
             }}
 
             /* Titres de section épurés (plus de boîte verte opaque avec bordure) */
             QLabel#filterTitle {{
                 background-color: transparent;
-                color: {accent};
+                color: {muted};
                 border: none;
                 border-radius: 0;
                 padding: 0;
-                font-weight: 800;
-                font-size: 11px;
-                text-transform: uppercase;
-                letter-spacing: 1.5px;
-                margin-left: 4px;
-                margin-top: 14px;
-                margin-bottom: 2px;
+                font-weight: 600;
+                font-size: 12px;
+                text-transform: none;
+                letter-spacing: 0;
+                margin: 0;
             }}
 
             /* Boutons d'action principaux (au bas de la sidebar) */
@@ -592,13 +590,13 @@ class ThemeManager:
 
             /* Cases à cocher et boutons radio modernisés */
             QCheckBox, QRadioButton {{
-                spacing: 8px;
-                padding: 4px 6px;
+                spacing: 7px;
+                padding: 2px 0;
                 color: {text};
                 font-size: 12px;
                 border-radius: 4px;
                 background: transparent;
-                font-weight: 600;
+                font-weight: 400;
             }}
             QCheckBox:hover, QRadioButton:hover {{
                 background-color: {card_hover};
@@ -642,8 +640,8 @@ class ThemeManager:
                 padding: 4px 8px;
                 color: {text};
                 font-size: 12px;
-                font-weight: 600;
-                min-width: 90px;
+                font-weight: 400;
+                min-width: 0;
                 min-height: 28px;
             }}
             QComboBox:hover, QDateEdit:hover, QSpinBox:hover, QLineEdit:hover {{
@@ -672,6 +670,8 @@ class ThemeManager:
                 border: none;
                 width: 20px;
             }}
+            QDateEdit::drop-down {{ border:0; width:24px; }}
+            QDateEdit::down-arrow {{ image:url('{assets}/chevron-down.svg'); width:12px; height:12px; }}
 
             /* Boutons de sélection numérique (Spin/Date buttons) */
             QDateEdit::up-button, QDateEdit::down-button,
@@ -806,6 +806,10 @@ class ThemeManager:
             }}
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
+            }}
+            QDateEdit::down-arrow, QDateEdit::down-arrow:hover {{
+                width:12px; height:12px; border:0;
+                image:url('{assets}/chevron-down.svg');
             }}
         """
 

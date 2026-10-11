@@ -23,6 +23,7 @@ from typing import Any
 from PySide6.QtCore import QDate, QDateTime, Qt, QTime
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCalendarWidget,
     QCheckBox,
     QComboBox,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QSpinBox,
     QTableView,
     QVBoxLayout,
@@ -277,6 +279,8 @@ class Filters(QWidget):
         if display is None:
             display = {}
         super().__init__(None)
+        self.setObjectName("analysisFilters")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.db = db
         self.db_cursor: Any = db.connection.cursor() if getattr(db, "connection", None) else db.cursor
         self.sql = db.sql
@@ -377,6 +381,9 @@ class Filters(QWidget):
             self.day_start = float(gen["day_start"])
 
         self.setLayout(QVBoxLayout())
+        self.layout().setContentsMargins(14, 12, 14, 12)
+        self.layout().setSpacing(12)
+        self.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.callback: dict[str, Any] = {}
 
@@ -528,23 +535,30 @@ class Filters(QWidget):
     def _create_card_container(self, title: str, fill_func: Any, tooltip: str = "", *args, **kwargs) -> QWidget:
         """Helper to create a container widget with a QLabel title badge and a titleless QGroupBox card."""
         container = QWidget()
+        container.setObjectName("filterSection")
+        container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
         # Title Label styled as badge
-        title_label = QLabel(title)
+        title_label = QLabel(title.strip().rstrip(":"))
         title_label.setObjectName("filterTitle")
         layout.addWidget(title_label, alignment=Qt.AlignmentFlag.AlignLeft)
 
         # Card QGroupBox
         card_box = QGroupBox()
+        card_box.setProperty("filterBody", True)
+        card_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         if tooltip:
             card_box.setToolTip(tooltip)
             title_label.setToolTip(tooltip)
 
         # Call the fill function to add contents to the card
         fill_func(card_box, *args, **kwargs)
+        if card_box.layout() is not None:
+            card_box.layout().setContentsMargins(0, 4, 0, 0)
+            card_box.layout().setSpacing(6)
 
         layout.addWidget(card_box)
         return container
@@ -553,7 +567,7 @@ class Filters(QWidget):
         """Create the player selection frame."""
         self.leHeroes: dict[str, QLineEdit] = {}
         return self._create_card_container(
-            "🎭 " + self.filterText["playerstitle"],
+            self.filterText["playerstitle"],
             self.fillPlayerFrame,
             "Select the poker player (hero) to analyze",
             self.display,
@@ -563,7 +577,7 @@ class Filters(QWidget):
         """Create the sites selection frame."""
         self.cbSites = {}
         return self._create_card_container(
-            "🌐 " + self.filterText["sitestitle"],
+            self.filterText["sitestitle"],
             self.fillSitesFrame,
             "Filter by poker sites (PokerStars, Winamax, etc.)",
         )
@@ -571,7 +585,7 @@ class Filters(QWidget):
     def create_games_frame(self) -> QWidget:
         """Create the games selection frame."""
         return self._create_card_container(
-            "🃏 " + self.filterText["gamestitle"],
+            self.filterText["gamestitle"],
             self.fillGamesFrame,
             "Filter by poker game variants (Hold'em, Omaha, Stud, etc.)",
         )
@@ -580,7 +594,7 @@ class Filters(QWidget):
         """Create the tournament type selection frame."""
         self.cbTourney = {}
         return self._create_card_container(
-            "🏆 " + self.filterText["tourneytitle"],
+            self.filterText["tourneytitle"],
             self.fillTourneyTypesFrame,
             "Filter by tournament type (Ring games vs Tournaments)",
         )
@@ -603,7 +617,7 @@ class Filters(QWidget):
     def create_currencies_frame(self) -> QWidget:
         """Create the currencies selection frame."""
         return self._create_card_container(
-            "💱 " + self.filterText["currenciestitle"],
+            self.filterText["currenciestitle"],
             self.fillCurrenciesFrame,
             "Filter by currency (USD, EUR, Play Money, etc.)",
         )
@@ -611,7 +625,7 @@ class Filters(QWidget):
     def create_limits_frame(self) -> QWidget:
         """Create the limits selection frame."""
         return self._create_card_container(
-            "💰 " + self.filterText["limitstitle"],
+            self.filterText["limitstitle"],
             self.fillLimitsFrame,
             "Filter by betting limits and stake levels",
             self.display,
@@ -620,7 +634,7 @@ class Filters(QWidget):
     def create_positions_frame(self) -> QWidget:
         """Create the positions selection frame."""
         return self._create_card_container(
-            "📍 " + self.filterText["positionstitle"],
+            self.filterText["positionstitle"],
             self.fillPositionsFrame,
             "Filter by table positions (Button, Small Blind, Big Blind, etc.)",
             self.display,
@@ -643,13 +657,13 @@ class Filters(QWidget):
     def create_date_frame(self) -> QWidget:
         """Create the date range selection frame."""
         return self._create_card_container(
-            "📅 " + self.filterText["datestitle"], self.fillDateFrame, "Filter by date range for your poker sessions"
+            self.filterText["datestitle"], self.fillDateFrame, "Filter by date range for your poker sessions"
         )
 
     def create_cards_frame(self) -> QWidget:
         """Create the hole cards selection frame."""
         return self._create_card_container(
-            "🎴 " + self.filterText["cardstitle"],
+            self.filterText["cardstitle"],
             self.fillHoleCardsFrame,
             "Filter by starting hole cards (AA, AK, etc.)",
         )
@@ -1012,7 +1026,7 @@ class Filters(QWidget):
             self.leHeroes[site] = QLineEdit(primary_name)
 
             for alias in aliases:
-                self.heroList.addItem(resolve_site_icon(site), f"{alias} on {site}", ("site_alias", site, alias))
+                self.heroList.addItem(f"{alias} on {site}", ("site_alias", site, alias))
 
         # Multiroom hero profiles (aggregate a player's identity across rooms).
         getter = getattr(self.conf, "get_hero_profiles", None)
@@ -1029,14 +1043,16 @@ class Filters(QWidget):
             self.cbGroups["allplayers"] = QCheckBox(self.filterText["groupsall"])
             hbox.addWidget(self.cbGroups["allplayers"])
 
-            lbl = QLabel(_("Min # Hands:"))
-            hbox.addWidget(lbl)
+            minimum_row = QHBoxLayout()
+            vbox.addLayout(minimum_row)
+            minimum_row.addWidget(QLabel(_("Minimum hands")))
 
             self.phands = QSpinBox()
+            self.phands.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             self.phands.setMaximum(int(1e5))
-            hbox.addWidget(self.phands)
+            minimum_row.addWidget(self.phands)
 
-        refresh_button = QPushButton(_("Refresh Filters"))
+        refresh_button = QPushButton(_("Refresh available filters"))
         refresh_button.clicked.connect(self.update_filters_for_hero)
         vbox.addWidget(refresh_button)
 
@@ -1049,17 +1065,7 @@ class Filters(QWidget):
             self.cbSites[site] = QCheckBox(site)
             self.cbSites[site].setChecked(True)
 
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(8)
-
-            icon_label = QLabel()
-            icon_label.setFixedSize(20, 20)
-            icon_label.setPixmap(resolve_site_icon(site).pixmap(20, 20))
-            row_layout.addWidget(icon_label)
-            row_layout.addWidget(self.cbSites[site], 1)
-            vbox.addWidget(row)
+            vbox.addWidget(self.cbSites[site])
 
     def fillTourneyTypesFrame(self, frame: QGroupBox) -> None:
         """Fill the tournament types frame with tournament selection controls."""
@@ -1502,28 +1508,30 @@ class Filters(QWidget):
 
     def fillSeatsFrame(self, frame: QGroupBox) -> None:
         """Fill the seats frame with seat range selection controls."""
-        hbox = QHBoxLayout()
+        hbox = QGridLayout()
         frame.setLayout(hbox)
 
-        lbl_from = QLabel(self.filterText["seatsbetween"])
-        lbl_to = QLabel(self.filterText["seatsand"])
+        lbl_from = QLabel(_("Minimum"))
+        lbl_to = QLabel(_("Maximum"))
 
         adj1 = QSpinBox()
+        adj1.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         adj1.setRange(2, 10)
         adj1.setValue(2)
         adj1.valueChanged.connect(partial(self.__seats_changed, which="from"))
 
         adj2 = QSpinBox()
+        adj2.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         adj2.setRange(2, 10)
         adj2.setValue(10)
         adj2.valueChanged.connect(partial(self.__seats_changed, which="to"))
 
-        hbox.addStretch()
-        hbox.addWidget(lbl_from)
-        hbox.addWidget(adj1)
-        hbox.addWidget(lbl_to)
-        hbox.addWidget(adj2)
-        hbox.addStretch()
+        hbox.addWidget(lbl_from, 0, 0)
+        hbox.addWidget(lbl_to, 0, 1)
+        hbox.addWidget(adj1, 1, 0)
+        hbox.addWidget(adj2, 1, 1)
+        hbox.setColumnStretch(0, 1)
+        hbox.setColumnStretch(1, 1)
 
         self.sbSeats["from"] = adj1
         self.sbSeats["to"] = adj2
@@ -1545,34 +1553,55 @@ class Filters(QWidget):
 
     def fillDateFrame(self, frame: QGroupBox) -> None:
         """Fill the date frame with date range selection controls."""
-        table = QGridLayout()
-        frame.setLayout(table)
+        layout = QVBoxLayout(frame)
+        self.date_preset = QComboBox()
+        for label, key in (("All history", "all"), ("Today", "today"), ("Last 7 days", "seven"),
+                           ("This month", "month"), ("Custom dates", "custom")):
+            self.date_preset.addItem(_(label), key)
+        self.date_preset.setAccessibleName(_("Date range"))
+        layout.addWidget(self.date_preset)
+        self.custom_dates = QWidget()
+        dates = QGridLayout(self.custom_dates)
+        dates.setContentsMargins(0, 0, 0, 0)
+        for row, (label, control) in enumerate((("From", self.start_date), ("To", self.end_date))):
+            control.setDisplayFormat("dd MMM yyyy")
+            control.setCalendarPopup(True)
+            control.setAccessibleName(_(label))
+            control.setKeyboardTracking(False)
+            control.dateChanged.connect(self._sync_date_preset)
+            dates.addWidget(QLabel(_(label)), row, 0)
+            dates.addWidget(control, row, 1)
+        dates.setColumnStretch(1, 1)
+        layout.addWidget(self.custom_dates)
+        self._updating_dates = False
+        self.custom_dates.hide()
+        self.date_preset.currentIndexChanged.connect(self._apply_date_preset)
 
-        lbl_start = QLabel(_("From:"))
-        btn_start = QPushButton(_("Cal"))
-        btn_start.clicked.connect(
-            partial(self.__calendar_dialog, date_edit=self.start_date),
-        )
-        clr_start = QPushButton(_("Reset"))
-        clr_start.clicked.connect(self.__clear_start_date)
+    def _apply_date_preset(self) -> None:
+        key = self.date_preset.currentData()
+        today = QDate.currentDate()
+        bounds = {"all": (QDate(1970, 1, 1), QDate(2100, 1, 1)), "today": (today, today),
+                  "seven": (today.addDays(-6), today), "month": (QDate(today.year(), today.month(), 1), today)}
+        if key == "custom" and self.start_date.date() == QDate(1970, 1, 1) and self.end_date.date() == QDate(2100, 1, 1):
+            bounds["custom"] = (QDate(today.year(), today.month(), 1), today)
+        self._updating_dates = True
+        try:
+            if key in bounds:
+                start, end = bounds[key]
+                self.start_date.setDate(start)
+                self.end_date.setDate(end)
+        finally:
+            self._updating_dates = False
+        self.custom_dates.setVisible(key == "custom")
 
-        lbl_end = QLabel(_("To:"))
-        btn_end = QPushButton(_("Cal"))
-        btn_end.clicked.connect(partial(self.__calendar_dialog, date_edit=self.end_date))
-        clr_end = QPushButton(_("Reset"))
-        clr_end.clicked.connect(self.__clear_end_date)
-
-        table.addWidget(lbl_start, 0, 0)
-        table.addWidget(btn_start, 0, 1)
-        table.addWidget(self.start_date, 0, 2)
-        table.addWidget(clr_start, 0, 3)
-
-        table.addWidget(lbl_end, 1, 0)
-        table.addWidget(btn_end, 1, 1)
-        table.addWidget(self.end_date, 1, 2)
-        table.addWidget(clr_end, 1, 3)
-
-        table.setColumnStretch(0, 1)
+    def _sync_date_preset(self) -> None:
+        if getattr(self, "_updating_dates", False):
+            return
+        all_history = self.start_date.date() == QDate(1970, 1, 1) and self.end_date.date() == QDate(2100, 1, 1)
+        self.date_preset.blockSignals(True)
+        self.date_preset.setCurrentIndex(self.date_preset.findData("all" if all_history else "custom"))
+        self.date_preset.blockSignals(False)
+        self.custom_dates.setVisible(not all_history)
 
     def get_limits_where_clause(self, limits: list[str]) -> str:
         """Generate WHERE clause for limits filtering."""

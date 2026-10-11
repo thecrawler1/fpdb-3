@@ -1,5 +1,6 @@
 """Lightweight database keys for sorting the full hand list before pagination."""
 
+from contextlib import closing
 from typing import Any
 
 from fpdb_3_legacy.table_cards import card_sort_key
@@ -23,6 +24,18 @@ FIELDS = {
 }
 
 
+def load_hand_numbers(db, handids) -> dict[int, str]:
+    """Fetch only identifiers once; searches never reconstruct all poker hands."""
+    placeholder = db.sql.query.get("placeholder", "%s")
+    numbers = {}
+    with closing(db.get_cursor()) as cursor:
+        for start in range(0, len(handids), 400):
+            chunk = handids[start:start + 400]
+            cursor.execute(f"SELECT id, siteHandNo FROM Hands WHERE id IN ({', '.join([placeholder] * len(chunk))})", chunk)
+            numbers.update({handid: str(number or "") for handid, number in cursor.fetchall()})
+    return numbers
+
+
 def _site_aliases(site, heroes):
     aliases = heroes.get(site)
     if aliases is None:
@@ -43,31 +56,31 @@ def load_sort_keys(db, handids, column, heroes):
     placeholder = db.sql.query.get("placeholder", "%s")
     keys: dict[int, Any] = {}
     priorities: dict[int, int] = {}
-    cursor = db.get_cursor()
-    for start in range(0, len(handids), 400):
-        chunk = handids[start:start + 400]
-        query = f"""SELECT h.id, s.name, p.name, hp.seatNo, h.heroSeat, {fields}
-                    FROM Hands h JOIN Gametypes gt ON gt.id = h.gametypeId
-                    JOIN Sites s ON s.id = gt.siteId
-                    LEFT JOIN HandsPlayers hp ON hp.handId = h.id
-                    LEFT JOIN Players p ON p.id = hp.playerId
-                    WHERE h.id IN ({', '.join([placeholder] * len(chunk))})"""
-        cursor.execute(query, chunk)
-        for handid, site, player, seat, hero_seat, *values in cursor.fetchall():
-            aliases = _site_aliases(site, heroes)
-            if (aliases and player not in aliases) or (not aliases and seat != hero_seat):
-                continue
-            priority = aliases.index(player) if aliases else 0
-            if handid in priorities and priorities[handid] <= priority:
-                continue
-            priorities[handid] = priority
-            value: Any
-            if column in ("Street0", "Street1-4"):
-                value = card_sort_key(values, hole=column == "Street0")
-            elif column in ("Date", "Pos", "Game"):
-                value = str(values[0] or "")
-            else:
-                value = values[0] or 0
-            keys[handid] = value
+    with closing(db.get_cursor()) as cursor:
+        for start in range(0, len(handids), 400):
+            chunk = handids[start:start + 400]
+            query = f"""SELECT h.id, s.name, p.name, hp.seatNo, h.heroSeat, {fields}
+                        FROM Hands h JOIN Gametypes gt ON gt.id = h.gametypeId
+                        JOIN Sites s ON s.id = gt.siteId
+                        LEFT JOIN HandsPlayers hp ON hp.handId = h.id
+                        LEFT JOIN Players p ON p.id = hp.playerId
+                        WHERE h.id IN ({', '.join([placeholder] * len(chunk))})"""
+            cursor.execute(query, chunk)
+            for handid, site, player, seat, hero_seat, *values in cursor.fetchall():
+                aliases = _site_aliases(site, heroes)
+                if (aliases and player not in aliases) or (not aliases and seat != hero_seat):
+                    continue
+                priority = aliases.index(player) if aliases else 0
+                if handid in priorities and priorities[handid] <= priority:
+                    continue
+                priorities[handid] = priority
+                value: Any
+                if column in ("Street0", "Street1-4"):
+                    value = card_sort_key(values, hole=column == "Street0")
+                elif column in ("Date", "Pos", "Game"):
+                    value = str(values[0] or "")
+                else:
+                    value = values[0] or 0
+                keys[handid] = value
     default = card_sort_key([], hole=column == "Street0") if column.startswith("Street") else "" if column in ("Date", "Pos", "Game") else 0
     return {handid: keys.get(handid, default) for handid in handids}

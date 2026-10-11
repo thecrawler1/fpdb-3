@@ -40,6 +40,16 @@ def public_database(root, temporary):
 
 
 def workspace(config, sql, db, ids, temporary):
+    from unittest.mock import patch
+
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings(str(Path(temporary) / "columns.ini"), QSettings.Format.IniFormat)
+    with patch("fpdb_3_legacy.table_columns.QSettings", lambda *_args, **_kwargs: settings):
+        return _workspace(config, sql, db, ids, temporary)
+
+
+def _workspace(config, sql, db, ids, temporary):
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QTabWidget, QWidget
 

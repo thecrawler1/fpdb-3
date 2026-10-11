@@ -144,3 +144,30 @@ def test_biggest_differences_entry_point_is_reachable(explorer, qtbot) -> None:
     explorer.differences_button.click()
 
     assert called == [True]
+
+
+def test_catalog_has_inline_metadata_instead_of_description_tooltips(explorer):
+    item = explorer.study_list.item(0)
+    assert not item.toolTip()
+    assert "panels" in item.data(257)
+    assert "• " in explorer.study_panels.text()
+    assert "Tags:" not in explorer.study_meta.text()
+    assert explorer.open_button.property("primaryAction") is True
+
+
+def test_categories_can_be_cleared_and_remain_reachable_when_stacked(explorer, qtbot):
+    explorer.resize(1280, 900)
+    explorer.show()
+    qtbot.wait(20)
+    count = explorer.study_list.count()
+    explorer._choose_category("preflop")
+    assert explorer.study_list.count() < count
+    explorer._choose_category("preflop")
+    assert explorer.study_list.count() == count
+    explorer.resize(700, 640)
+    qtbot.wait(20)
+    explorer.pane_switcher.set_active(0)
+    assert explorer.category_box.isVisibleTo(explorer)
+    explorer.pane_switcher.set_active(1)
+    assert not explorer.category_box.isVisibleTo(explorer)
+    assert explorer.study_list.height() > 400

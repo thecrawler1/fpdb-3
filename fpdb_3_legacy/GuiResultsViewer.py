@@ -7,13 +7,14 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
-from PySide6.QtCore import QDate, QSortFilterProxyModel, Qt, QTimer, QTimeZone, Signal
+from PySide6.QtCore import QDate, QIODevice, QSaveFile, QSortFilterProxyModel, Qt, QTimer, QTimeZone, Signal
 from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDateEdit,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fpdb_3_legacy import Card, Database
+from fpdb_3_legacy import Database
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_number
 from fpdb_3_legacy.period_results import (
@@ -41,6 +42,16 @@ from fpdb_3_legacy.period_results import (
     profit_curves,
     results_query,
     summarize_results,
+)
+from fpdb_3_legacy.results_export import results_csv
+from fpdb_3_legacy.review_widgets import (
+    EmptyState,
+    FilterChips,
+    SegmentedControl,
+    game_label,
+    labeled_control,
+    review_stylesheet,
+    text_label,
 )
 from fpdb_3_legacy.ring_stats.base import DbWorker
 from fpdb_3_legacy.ring_stats.styles import get_modern_qss, get_theme_palette
@@ -82,6 +93,7 @@ def local_zone() -> tzinfo:
 
 class GuiResultsViewer(QWidget):
     hands_requested = Signal(list)
+    import_requested = Signal()
 
     def __init__(self, config, querylist=None, *, db=None, zone: tzinfo | None = None, autoload=True):
         super().__init__()
@@ -93,13 +105,22 @@ class GuiResultsViewer(QWidget):
         self._generation = 0
         self._closed = False
         self._db_closed = False
+        self._loading = False
+        self._results_current = True
+        self._request_status = ""
+        self._has_load_error = False
+        self._graph_context = None
+        self._custom_date_timer = QTimer(self)
+        self._custom_date_timer.setSingleShot(True)
+        self._custom_date_timer.setInterval(300)
+        self._custom_date_timer.timeout.connect(self.refresh)
         self.raw_hands: tuple[ResultHand, ...] = ()
         self.filtered_hands: tuple[ResultHand, ...] = ()
         self.periods: list[PeriodResult] = []
         self.total = summarize_results(())
         self.selection: date | str | None = None
         self.setObjectName("resultsViewer")
-        self.setStyleSheet(get_modern_qss())
+        self.setStyleSheet(get_modern_qss() + review_stylesheet())
         self._build_controls()
         self._build_table_and_graph()
         self._populate_heroes()
@@ -115,6 +136,12 @@ class GuiResultsViewer(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         toolbar = QHBoxLayout()
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        heading.addWidget(text_label(_("Results"), "title"))
+        heading.addWidget(text_label(_("Cash performance, period by period"), "caption"))
+        toolbar.addLayout(heading)
+        toolbar.addStretch()
         self.hero_combo = QComboBox()
         self.hero_combo.setMaximumWidth(280)
         self.group_combo = QComboBox()
@@ -125,26 +152,18 @@ class GuiResultsViewer(QWidget):
                            ("This month", "month"), ("This year", "year"), ("All history", "all"), ("Custom", "custom")):
             self.interval_combo.addItem(_(title), key)
         self.interval_combo.setCurrentIndex(3)
-        for title, control in (("Hero", self.hero_combo), ("Group by", self.group_combo), ("Period", self.interval_combo)):
-            toolbar.addWidget(QLabel(_(title)))
-            toolbar.addWidget(control)
-        self.from_date, self.to_date = QDateEdit(), QDateEdit()
-        for control in (self.from_date, self.to_date):
-            control.setCalendarPopup(True)
-            control.setDisplayFormat("dd/MM/yyyy")
-            toolbar.addWidget(control)
-        toolbar.addStretch()
-        self.more_filters = QToolButton()
-        self.more_filters.setText(_("More filters"))
-        self.more_filters.setCheckable(True)
-        self.columns_button = QToolButton()
-        self.columns_button.setText(_("Columns"))
-        self.columns_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.refresh_button = QPushButton(_("Refresh"))
-        toolbar.addWidget(self.more_filters)
-        toolbar.addWidget(self.columns_button)
-        toolbar.addWidget(self.refresh_button)
+        controls = QHBoxLayout()
+        controls.setSpacing(16)
+        self.group_segments = SegmentedControl(self.group_combo)
+        for title, control in (("Hero", self.hero_combo), ("Group by", self.group_segments), ("Date range", self.interval_combo)):
+            controls.addWidget(labeled_control(_(title), control))
+        self._build_custom_dates()
+        self._build_actions(toolbar)
         layout.addLayout(toolbar)
+        controls.addStretch()
+        controls.addWidget(self.more_filters, 0, Qt.AlignmentFlag.AlignBottom)
+        layout.addLayout(controls)
+        layout.addWidget(self.date_panel)
         self.filter_panel = QWidget()
         filters = QHBoxLayout(self.filter_panel)
         filters.setContentsMargins(0, 0, 0, 0)
@@ -157,8 +176,49 @@ class GuiResultsViewer(QWidget):
         filters.addStretch()
         self.filter_panel.hide()
         layout.addWidget(self.filter_panel)
+        self.active_filters = FilterChips()
+        layout.addWidget(self.active_filters)
+        self._build_status(layout)
+
+    def _build_status(self, layout) -> None:
         self.status = QLabel()
-        layout.addWidget(self.status)
+        self.status.setProperty("reviewText", "caption")
+        self.status.setWordWrap(True)
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status, 1)
+        self.retry_button = QToolButton()
+        self.retry_button.setText(_("Retry"))
+        self.retry_button.clicked.connect(self.refresh)
+        self.retry_button.hide()
+        status_row.addWidget(self.retry_button)
+        layout.addLayout(status_row)
+
+    def _build_actions(self, toolbar) -> None:
+        self.more_filters = QToolButton()
+        self.more_filters.setText(_("Filters"))
+        self.more_filters.setCheckable(True)
+        self.columns_button = QToolButton()
+        self.columns_button.setText(_("Columns"))
+        self.columns_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.refresh_button = QPushButton(_("Refresh"))
+        self.export_button = QPushButton(_("Export CSV"))
+        self.export_button.setToolTip(_("Export all filtered periods and Total in the current table order."))
+        toolbar.addWidget(self.columns_button)
+        toolbar.addWidget(self.refresh_button)
+        toolbar.addWidget(self.export_button)
+
+    def _build_custom_dates(self) -> None:
+        self.from_date, self.to_date = QDateEdit(), QDateEdit()
+        self.date_panel = QWidget()
+        layout = QHBoxLayout(self.date_panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for label, control in (("From", self.from_date), ("To", self.to_date)):
+            control.setCalendarPopup(True)
+            control.setDisplayFormat("dd/MM/yyyy")
+            control.setAccessibleName(_(label))
+            layout.addWidget(QLabel(_(label)))
+            layout.addWidget(control)
+        layout.addStretch()
 
     def _build_table_and_graph(self) -> None:
         self.splitter = QSplitter(Qt.Orientation.Vertical)
@@ -175,6 +235,7 @@ class GuiResultsViewer(QWidget):
         self.table.setObjectName("calendarResultsTable")
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+        self.empty_state = EmptyState(self.table)
         table_layout.addWidget(self.table)
         self.total_model = QStandardItemModel(0, len(HEADINGS), self)
         self.total_table = self._table(self.total_model)
@@ -184,33 +245,47 @@ class GuiResultsViewer(QWidget):
         self.total_table.setFixedHeight(48)
         table_layout.addWidget(self.total_table)
         self.splitter.addWidget(table_panel)
+        self._build_graph_panel()
+        self.splitter.setSizes([300, 360])
+        self._connect_view_actions()
+
+    def _build_graph_panel(self) -> None:
         graph_panel = QWidget()
+        self.graph_panel = graph_panel
         graph_layout = QVBoxLayout(graph_panel)
         graph_layout.setContentsMargins(0, 8, 0, 0)
         options = QHBoxLayout()
         self.units_combo = QComboBox()
         self.units_combo.addItem("$", False)
         self.units_combo.addItem("BB", True)
-        options.addWidget(QLabel(_("Graph")))
-        options.addWidget(self.units_combo)
+        self.selection_label = text_label("", "heading")
+        self.selection_label.setWordWrap(True)
+        options.addWidget(self.selection_label, 1)
+        self.units_segments = SegmentedControl(self.units_combo)
+        options.addWidget(self.units_segments)
+        self.all_periods_button = QPushButton(_("All periods"))
+        self.all_periods_button.setCheckable(True)
+        self.all_periods_button.clicked.connect(self.select_total)
+        options.addWidget(self.all_periods_button)
+        legend = QHBoxLayout()
         self.line_checks = []
         for name in ("Profit", "Showdown", "Non-showdown", "All-in EV"):
             check = QCheckBox(_(name))
             check.setChecked(True)
             self.line_checks.append(check)
-            options.addWidget(check)
-        options.addStretch()
+            legend.addWidget(check)
+        legend.addStretch()
         self.reset_graph_button = QPushButton(_("Reset view"))
         self.reset_graph_button.clicked.connect(lambda: self.graph.getViewBox().autoRange())
         options.addWidget(self.reset_graph_button)
         self.hands_button = QPushButton(_("View hands"))
+        self.hands_button.setProperty("primaryAction", True)
         options.addWidget(self.hands_button)
         graph_layout.addLayout(options)
+        graph_layout.addLayout(legend)
         self.graph = ProfitGraphWidget()
         graph_layout.addWidget(self.graph, 1)
         self.splitter.addWidget(graph_panel)
-        self.splitter.setSizes([300, 360])
-        self._connect_view_actions()
 
     def _connect_view_actions(self) -> None:
         self.column_controls = install_column_controls(
@@ -219,6 +294,7 @@ class GuiResultsViewer(QWidget):
         self.column_controls.visibility_changed.connect(lambda column, visible: self.total_table.setColumnHidden(column, not visible))
         self.columns_button.setMenu(self.column_controls.menu())
         self.table.horizontalHeader().sectionResized.connect(self._sync_total_columns)
+        self.table.horizontalHeader().sectionMoved.connect(self._sync_total_columns)
         self.table.selectionModel().currentRowChanged.connect(self._period_selected)
         self.table.clicked.connect(self._period_selected)
         self.table.doubleClicked.connect(lambda _index: self.open_hands())
@@ -230,7 +306,7 @@ class GuiResultsViewer(QWidget):
 
     def refresh_theme(self, colors=None, theme_colors=None) -> None:
         """Update local styles, financial text and plotted colours together."""
-        self.setStyleSheet(get_modern_qss())
+        self.setStyleSheet(get_modern_qss() + review_stylesheet())
         self._rebuild_table()
 
     @staticmethod
@@ -269,16 +345,43 @@ class GuiResultsViewer(QWidget):
 
     def _connect_controls(self) -> None:
         self.refresh_button.clicked.connect(self.refresh)
+        self.export_button.clicked.connect(self._choose_export_path)
         self.hero_combo.currentIndexChanged.connect(self.refresh)
         self.interval_combo.currentIndexChanged.connect(self._interval_changed)
         self.group_combo.currentIndexChanged.connect(self._regroup)
         self.more_filters.toggled.connect(self.filter_panel.setVisible)
         self.game_combo.currentIndexChanged.connect(self._rebuild_table)
         self.limit_combo.currentIndexChanged.connect(self._rebuild_table)
+        self.from_date.dateChanged.connect(self._custom_dates_changed)
+        self.to_date.dateChanged.connect(self._custom_dates_changed)
+
+    def _custom_dates_changed(self) -> None:
+        if self.interval_combo.currentData() != "custom":
+            return
+        self._generation += 1  # Reject a reply for dates that were just edited.
+        self._custom_date_timer.stop()
+        if self.from_date.date() > self.to_date.date():
+            self._request_status = _("Start date must not be after end date")
+            border = get_theme_palette()['danger']
+            self.from_date.setStyleSheet(f"border-color:{border};")
+            self.to_date.setStyleSheet(f"border-color:{border};")
+        else:
+            self.from_date.setStyleSheet("")
+            self.to_date.setStyleSheet("")
+            self._request_status = _("Updating dates…")
+            self._custom_date_timer.start()
+        self._loading = False
+        self._has_load_error = False
+        self._results_current = False
+        self._update_status()
 
     def _set_preset(self) -> None:
         key = self.interval_combo.currentData()
         custom = key == "custom"
+        if not custom:
+            self.from_date.setStyleSheet("")
+            self.to_date.setStyleSheet("")
+        self.date_panel.setVisible(custom)
         self.from_date.setVisible(custom)
         self.to_date.setVisible(custom)
         if not custom:
@@ -294,18 +397,19 @@ class GuiResultsViewer(QWidget):
     def refresh(self) -> None:
         if self._closed:
             return
+        self._custom_date_timer.stop()
         self._generation += 1
         generation = self._generation
-        previous_selection = self.selection
-        self.raw_hands = ()
-        self._rebuild_table()
-        self.selection = previous_selection
+        self._results_current = False
+        self._loading = False
+        self._has_load_error = False
         player_id = self.hero_combo.currentData()
         if player_id is None:
             self._populate_heroes()
             player_id = self.hero_combo.currentData()
         if player_id is None:
-            self.status.setText(_("No configured Hero found. Import hands and check the site screen name."))
+            self._request_status = _("No configured Hero found. Import hands and check the site screen name.")
+            self._update_status()
             return
         start = end = None
         if self.interval_combo.currentData() != "all":
@@ -313,9 +417,14 @@ class GuiResultsViewer(QWidget):
         try:
             query, params = results_query(player_id, start, end, self.zone, self.db.sql.query["placeholder"])
         except ValueError as error:
-            self.status.setText(str(error))
+            self._request_status = str(error)
+            self._update_status()
             return
-        self.status.setText(_("Loading results…"))
+        self._loading = True
+        self._request_status = _("Loading results…")
+        if self.raw_hands:
+            self._request_status += " " + _("Displaying previous results.")
+        self._update_status()
         self._workers = [worker for worker in self._workers if not worker.isFinished()]
         worker = DbWorker(self.db, "calendarResults", query, params)
         self._workers.append(worker)
@@ -324,29 +433,43 @@ class GuiResultsViewer(QWidget):
             self._receive_rows(generation, rows)
 
         def failed(message):
-            if not self._closed and generation == self._generation:
-                self.status.setText(_("Could not load results: ") + message)
+            self._fail_results(generation, _("Could not load results: ") + message)
 
         worker.finished.connect(loaded)
         worker.error.connect(failed)
         worker.start()
 
+    def _fail_results(self, generation, message) -> None:
+        if self._closed or generation != self._generation:
+            return
+        self._loading = False
+        self._has_load_error = True
+        self._results_current = False
+        self._request_status = message
+        if self.raw_hands:
+            self._request_status += " " + _("Displaying previous results.")
+        self._update_status()
+
     def _receive_rows(self, generation, rows) -> None:
         if self._closed or generation != self._generation:
             return
         try:
-            self.raw_hands = parse_result_rows(rows)
+            parsed = parse_result_rows(rows)
         except (ValueError, TypeError, ArithmeticError) as error:
-            self.status.setText(_("Could not read result data: ") + str(error))
+            self._fail_results(generation, _("Could not read result data: ") + str(error))
             return
+        self.raw_hands = parsed
+        self._loading = False
+        self._results_current = True
+        self._has_load_error = False
+        self._request_status = ""
         self._populate_filters()
-        self.status.setText("" if self.raw_hands else _("No USD cash hands in this period. Try All history or another interval."))
         self._rebuild_table()
 
     def _populate_filters(self) -> None:
         games = sorted({hand.game for hand in self.raw_hands})
         stakes = sorted({(hand.big_blind, hand.limit_type, hand.stake_key) for hand in self.raw_hands})
-        game_options = [(str(Card.games.get(game, (game,))[0]), game) for game in games]
+        game_options = [(game_label(game), game) for game in games]
         stake_options = [(f"{kind.upper()} · BB {format_currency(blind / 100, 'USD')}" if blind > 0 else f"{kind.upper()} · BB —", key)
                          for blind, kind, key in stakes]
         for combo, title, options in ((self.game_combo, "All games", game_options), (self.limit_combo, "All limits", stake_options)):
@@ -404,9 +527,22 @@ class GuiResultsViewer(QWidget):
         self.filtered_hands = tuple(h for h in self.raw_hands if (game is None or h.game == game) and (stake is None or h.stake_key == stake))
         self.periods = group_results(self.filtered_hands, self.group_combo.currentData(), self.zone)
         self.total = summarize_results(self.filtered_hands)
+        self._update_filter_chips()
         self.table.selectionModel().blockSignals(True)
         self.model.clear()
         self.model.setHorizontalHeaderLabels([_(heading) for heading in HEADINGS])
+        descriptions = (
+            _("Click a period to show its profit curves. All periods includes the complete filtered selection."),
+            _("Number of hands in this filtered period."),
+            _("Voluntary preflop participation, measured over recorded VPIP opportunities."),
+            _("Preflop raise frequency, measured over recorded PFR opportunities."),
+            _("Net profit in US dollars."),
+            _("Big blinds won per 100 hands, using each hand's own big blind."),
+            _("All-in adjusted expected profit in US dollars."),
+            _("All-in adjusted big blinds per 100 hands."),
+        )
+        for column, description in enumerate(descriptions):
+            self.model.setHeaderData(column, Qt.Orientation.Horizontal, description, Qt.ItemDataRole.ToolTipRole)
         for result in self.periods:
             self.model.appendRow(self._items(result))
         self.total_model.clear()
@@ -427,6 +563,11 @@ class GuiResultsViewer(QWidget):
         self._render_graph()
 
     def _sync_total_columns(self, *_args) -> None:
+        source, target = self.table.horizontalHeader(), self.total_table.horizontalHeader()
+        for visual in range(source.count()):
+            logical = source.logicalIndex(visual)
+            if logical < target.count():
+                target.moveSection(target.visualIndex(logical), visual)
         for column in range(len(HEADINGS)):
             self.total_table.setColumnHidden(column, self.table.isColumnHidden(column))
             self.total_table.setColumnWidth(column, self.table.columnWidth(column))
@@ -454,14 +595,19 @@ class GuiResultsViewer(QWidget):
 
     def _render_graph(self) -> None:
         result = self.selected_result()
-        self.hands_button.setEnabled(bool(result.hands))
+        self._update_status()
+        self._update_empty_state()
+        self.graph_panel.setVisible(bool(self.filtered_hands))
+        self.total_table.setVisible(bool(self.filtered_hands))
+        self.all_periods_button.setChecked(self.selection == "total")
+        heading = _("All periods") if self.selection == "total" else self._label(result)
+        self.selection_label.setText(heading + _(" · {0} hands").format(len(result.hands)))
         if not result.hands:
             self.graph.clear()
-            self.graph.setTitle(_("No results"))
+            self.graph.setTitle(_("No results"), color=get_theme_palette()['muted_text'])
             self.graph.setLabel("bottom", _("Hands"))
             self.graph.setLabel("left", "BB" if self.units_combo.currentData() else "$")
-            if self.raw_hands:
-                self.status.setText(_("No hands match these filters."))
+            self._graph_context = None
             return
         try:
             curves = profit_curves(result.hands, in_bb=bool(self.units_combo.currentData()))
@@ -471,27 +617,107 @@ class GuiResultsViewer(QWidget):
             return
         self.graph.plot_profit_data(tuple(np.asarray(curve) for curve in curves), [h.hand_id for h in result.hands],
                                     units="BB" if self.units_combo.currentData() else "$",
-                                    title=f"{self._label(result)} · {len(result.hands)} " + _("hands"), show_all_lines=True)
+                                     title=f"{self._label(result)} · {len(result.hands)} " + _("hands"), show_all_lines=True)
+        context = (self.hero_combo.currentData(), self.selection, self.units_combo.currentData(),
+                   tuple(hand.hand_id for hand in result.hands))
+        if context != self._graph_context:
+            self.graph.getViewBox().autoRange()
+        self._graph_context = context
         if self.graph.plotItem.legend is not None:
             self.graph.plotItem.legend.hide()
+        self.graph.plotItem.titleLabel.hide()
         palette = get_theme_palette()
         for check, key, fallback in zip(self.line_checks, ("graph_up", "graph_showdown", "graph_down", "graph_ev"),
                                         ("#48bb78", "#3182ce", "#f56565", "#dd6b20")):
             check.setStyleSheet(f"color:{palette.get(key, fallback)}")
-        self.status.clear()
         self._line_visibility()
+
+    def _update_filter_chips(self) -> None:
+        entries = []
+        for key, caption, combo in (("game", _("Game"), self.game_combo), ("limit", _("Limit"), self.limit_combo)):
+            if combo.currentData() is not None:
+                entries.append((key, f"{caption}: {combo.currentText()}", lambda widget=combo: widget.setCurrentIndex(0)))
+        self.active_filters.set_entries(entries, self._clear_result_filters)
+        self.more_filters.setText(_("Filters") + (f" ({len(entries)})" if entries else ""))
+
+    def _clear_result_filters(self) -> None:
+        for combo in (self.game_combo, self.limit_combo):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+        self._rebuild_table()
+
+    def _update_empty_state(self) -> None:
+        if self.model.rowCount():
+            self.empty_state.hide()
+        elif self._loading:
+            self.empty_state.show_message(_("Loading results…"), _("Your results will appear here when the query finishes."))
+        elif self._has_load_error:
+            self.empty_state.show_message(_("Results could not be loaded"), _("Try the query again."), _("Retry"), self.refresh)
+        elif not self.hero_combo.count():
+            self.empty_state.show_message(_("Import your first hands"),
+                                          _("Import hand histories, then choose your Hero to start reviewing results."),
+                                          _("Import hands"), self.import_requested.emit)
+        elif self.raw_hands and not self.filtered_hands:
+            self.empty_state.show_message(_("No matches for these filters"), _("Clear the game and limit filters to return to your results."),
+                                          _("Clear filters"), self._clear_result_filters)
+        else:
+            self.empty_state.show_message(_("No cash hands in this date range"), _("Try a wider date range to find your imported hands."),
+                                          _("Show all history"), lambda: self.interval_combo.setCurrentIndex(self.interval_combo.findData("all")))
+
+    def _update_status(self) -> None:
+        self.retry_button.setVisible(self._has_load_error)
+        self._update_empty_state()
+        self.hands_button.setEnabled(self._results_current and bool(self.selected_result().hands))
+        self.export_button.setEnabled(self._results_current and bool(self.filtered_hands))
+        if self._request_status:
+            self.status.setText(self._request_status)
+        elif not self.raw_hands:
+            self.status.setText(_("No USD cash hands in this period. Try All history or another interval."))
+        elif not self.filtered_hands:
+            self.status.setText(_("No hands match these filters."))
+        else:
+            self.status.setText(_("{0} hands · {1} periods").format(len(self.filtered_hands), len(self.periods)))
+
+    def _choose_export_path(self) -> None:
+        path, _filter = QFileDialog.getSaveFileName(self, _("Export results"), "results.csv", _("CSV files (*.csv)"))
+        if path:
+            self.export_csv(path)
+
+    def export_csv(self, path: str) -> bool:
+        if not self._results_current or not self.filtered_hands:
+            return False
+        periods = {period.start.isoformat(): period for period in self.periods}
+        ordered = [periods[self.proxy.index(row, 0).data(PERIOD_ROLE)] for row in range(self.proxy.rowCount())]
+        content = results_csv(ordered, self.total, self._label).encode("utf-8-sig")
+        output = QSaveFile(path)
+        if not output.open(QIODevice.OpenModeFlag.WriteOnly):
+            self.status.setText(_("Could not export results: ") + output.errorString())
+            return False
+        if output.write(content) != len(content):
+            output.cancelWriting()
+            self.status.setText(_("Could not export results: ") + output.errorString())
+            return False
+        if not output.commit():
+            self.status.setText(_("Could not export results: ") + output.errorString())
+            return False
+        self.status.setText(_("Exported {0} periods and Total.").format(len(ordered)))
+        return True
 
     def _line_visibility(self) -> None:
         for curve, check in zip(self.graph.listDataItems(), self.line_checks):
             curve.setVisible(check.isChecked())
 
     def open_hands(self) -> None:
+        if not self._results_current:
+            return
         hands = self.selected_result().hands
         if hands:
             self.hands_requested.emit([hand.hand_id for hand in reversed(hands)])
 
     def shutdown_workers(self) -> None:
         self._closed = True
+        self._custom_date_timer.stop()
         self._generation += 1
         for worker in self._workers:
             worker.wait()

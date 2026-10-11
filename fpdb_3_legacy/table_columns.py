@@ -4,9 +4,10 @@ import contextlib
 from typing import Any
 
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QHeaderView, QMenu
 
 from fpdb_3_legacy.i18n import gettext as _
+from fpdb_3_legacy.table_clipboard import copy_table, install_table_copy
 
 TECHNICAL_COLUMNS = {"handid", "sitehandid", "sitehandno", "gametypeid", "playerid", "recordid", "flags"}
 
@@ -34,10 +35,15 @@ class ColumnControls(QObject):
         self.keys = keys or {}
         self.settings = settings or QSettings("fpdb", "table-columns")
         self.model: Any = None
+        self._applying = False
         header = view.horizontalHeader()
+        header.setSectionsMovable(True)
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self._open_menu)
         self.bind_model()
+        header.sectionResized.connect(self._save_width)
+        header.sectionMoved.connect(self._save_order)
+        install_table_copy(view)
 
     def bind_model(self) -> None:
         model = self.view.model()
@@ -60,6 +66,14 @@ class ColumnControls(QObject):
     def apply(self, *_args) -> None:
         if self.model is None:
             return
+        previous = self._applying
+        self._applying = True
+        try:
+            self._apply()
+        finally:
+            self._applying = previous
+
+    def _apply(self) -> None:
         saved: Any = self.settings.value(f"{self.namespace}/hidden", None)
         if isinstance(saved, str):
             saved = [saved]
@@ -79,6 +93,50 @@ class ColumnControls(QObject):
             self.visibility_changed.emit(0, True)
         density = self.settings.value(f"{self.namespace}/row-height", 40, type=int)
         self.view.verticalHeader().setDefaultSectionSize(density)
+        self._restore_layout()
+
+    def _restore_layout(self) -> None:
+        header = self.view.horizontalHeader()
+        order = self.settings.value(f"{self.namespace}/order", [])
+        if isinstance(order, str):
+            order = [order]
+        if not isinstance(order, (list, tuple)):
+            order = []
+        logical = {self.key(column): column for column in range(self.model.columnCount())}
+        for visual, key in enumerate(key for key in order if key in logical):
+            header.moveSection(header.visualIndex(logical[key]), visual)
+        widths = self.settings.value(f"{self.namespace}/widths", {})
+        if isinstance(widths, dict):
+            for key, width in widths.items():
+                if key in logical and isinstance(width, int) and 40 <= width <= 2000:
+                    header.resizeSection(logical[key], width)
+
+    def _save_width(self, column, _old, width) -> None:
+        if self._applying or self.model is None or column >= self.model.columnCount():
+            return
+        if self.view.horizontalHeader().sectionResizeMode(column) != QHeaderView.ResizeMode.Interactive:
+            return
+        widths = self.settings.value(f"{self.namespace}/widths", {})
+        widths = dict(widths) if isinstance(widths, dict) else {}
+        widths[self.key(column)] = max(40, min(2000, width))
+        self.settings.setValue(f"{self.namespace}/widths", widths)
+
+    def _save_order(self, *_args) -> None:
+        if self._applying or self.model is None or not self.model.columnCount():
+            return
+        header = self.view.horizontalHeader()
+        order = [self.key(header.logicalIndex(visual)) for visual in range(header.count())]
+        self.settings.setValue(f"{self.namespace}/order", order)
+
+    def resize_to_contents(self) -> None:
+        """Auto-size new content without overwriting the user's saved widths."""
+        previous = self._applying
+        self._applying = True
+        try:
+            self.view.resizeColumnsToContents()
+            self._restore_layout()
+        finally:
+            self._applying = previous
 
     def save(self) -> None:
         hidden = [self.key(i) for i in range(self.model.columnCount()) if self.view.isColumnHidden(i)]
@@ -93,8 +151,17 @@ class ColumnControls(QObject):
 
     def reset(self) -> None:
         self.settings.remove(f"{self.namespace}/hidden")
-        for column in range(self.model.columnCount()):
-            self.view.setColumnHidden(column, False)
+        self.settings.remove(f"{self.namespace}/widths")
+        self.settings.remove(f"{self.namespace}/order")
+        self._applying = True
+        try:
+            header = self.view.horizontalHeader()
+            for column in range(self.model.columnCount()):
+                header.moveSection(header.visualIndex(column), column)
+                self.view.setColumnHidden(column, False)
+            self.view.resizeColumnsToContents()
+        finally:
+            self._applying = False
         self.apply()
 
     def show_all(self) -> None:
@@ -124,6 +191,9 @@ class ColumnControls(QObject):
         menu.addSeparator()
         menu.addAction(_("Compact rows"), lambda: self.set_density(40))
         menu.addAction(_("Comfortable rows"), lambda: self.set_density(50))
+        menu.addSeparator()
+        menu.addAction(_("Copy selection"), lambda: copy_table(self.view))
+        menu.addAction(_("Copy displayed table with headers"), lambda: copy_table(self.view, selected=False, headers=True))
 
     def menu(self) -> QMenu:
         menu = QMenu(self.view)
@@ -150,6 +220,8 @@ def install_column_controls(view, namespace=None, *, essential=None, keys=None, 
             controller.essential = set(essential)
         if keys is not None:
             controller.keys = keys
+        if settings is not None:
+            controller.settings = settings
         controller.bind_model()
         if explicit:
             controller.apply()
