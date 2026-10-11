@@ -50,7 +50,6 @@ def get_modern_qss() -> str:
     # Variables translucides pour adapter automatiquement aux fonds
     border_rgba = "rgba(255, 255, 255, 0.08)" if dark else "rgba(0, 0, 0, 0.08)"
     grid_rgba = "rgba(255, 255, 255, 0.06)" if dark else "rgba(0, 0, 0, 0.06)"
-    alt_bg_rgba = "rgba(255, 255, 255, 0.02)" if dark else "rgba(0, 0, 0, 0.02)"
     card_border_rgba = "rgba(255, 255, 255, 0.12)" if dark else "rgba(0, 0, 0, 0.12)"
 
     return modernize_stylesheet(f"""
@@ -114,11 +113,11 @@ def get_modern_qss() -> str:
         background-color: {bg_base};
         gridline-color: transparent; /* Masquer la grille système par défaut */
         selection-background-color: {c['selection']};
-        selection-color: #ffffff;
+        selection-color: {text_color};
         border: 1px solid {border_rgba};
         border-radius: 8px;
         font-size: 12px;
-        alternate-background-color: {alt_bg_rgba};
+        alternate-background-color: {c['panel']};
     }}
     QTableView::item {{
         padding: 8px 12px;
@@ -127,7 +126,7 @@ def get_modern_qss() -> str:
     }}
     QTableView::item:selected {{
         background-color: {c['selection']};
-        color: #ffffff;
+        color: {text_color};
     }}
     QHeaderView::section {{
         background-color: {bg_card};
@@ -142,7 +141,7 @@ def get_modern_qss() -> str:
     }}
     QHeaderView::section:hover {{
         background-color: {c['panel_alt']};
-        color: #ffffff;
+        color: {text_color};
     }}
 
     /* Scrollbars */
@@ -152,7 +151,7 @@ def get_modern_qss() -> str:
         margin: 0px;
     }}
     QScrollBar::handle:vertical {{
-        background-color: {border_color};
+        background-color: {c['control_border']};
         min-height: 20px;
         border-radius: 4px;
     }}
@@ -174,7 +173,7 @@ def get_modern_qss() -> str:
         margin: 0px;
     }}
     QScrollBar::handle:horizontal {{
-        background-color: {border_color};
+        background-color: {c['control_border']};
         min-width: 20px;
         border-radius: 4px;
     }}
@@ -200,7 +199,7 @@ def get_modern_qss() -> str:
     }}
     QComboBox, QSpinBox {{
         background-color: {bg_base};
-        border: 1px solid {border_rgba};
+        border: 1px solid {c['control_border']};
         border-radius: 5px;
         padding: 4px 8px;
         color: {text_color};
@@ -209,6 +208,10 @@ def get_modern_qss() -> str:
     QComboBox:hover, QSpinBox:hover {{
         border-color: {accent};
     }}
+    QComboBox {{ padding-right: 30px; }}
+    QComboBox::item:selected {{ background-color: {c['selection']}; color: {text_color}; }}
+    QComboBox QAbstractItemView {{ background-color: {c['panel']}; color: {text_color};
+        selection-background-color: {c['selection']}; selection-color: {text_color}; }}
 
     /* Splitters */
     QSplitter::handle {{
@@ -231,12 +234,12 @@ def get_modern_qss() -> str:
         font-weight: bold;
     }}
     QPushButton:hover {{
-        background-color: {accent};
+        background-color: {c['button_hover']};
         border-color: {accent_hover};
-        color: #ffffff;
+        color: {text_color};
     }}
     QPushButton:pressed {{
-        background-color: {accent_hover};
+        background-color: {c['selection']};
     }}
 
     /* Grille de Starting Hands */

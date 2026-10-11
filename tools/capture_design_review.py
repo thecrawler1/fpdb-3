@@ -94,6 +94,14 @@ def capture(owner, hands, app, out):
     hands.filtersButton.setChecked(True)
     app.processEvents()
     owner.grab().save(str(out / "hands-filters.png"))
+    owner.nb.setCurrentIndex(0)
+    results = owner.nb.widget(0)
+    results.more_filters.setChecked(True)
+    app.processEvents()
+    results.limit_combo.showPopup()
+    app.processEvents()
+    results.limit_combo.view().window().grab().save(str(out / "limits-popup.png"))
+    results.limit_combo.hidePopup()
 
 
 def main():

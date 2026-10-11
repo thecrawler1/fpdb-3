@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
-from fpdb_3_legacy.design_system import ACCENT, modernize_stylesheet
+from fpdb_3_legacy.design_system import current_palette, modernize_stylesheet
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.ThemeManager import ThemeManager
 
@@ -14,7 +14,8 @@ def _icon(kind: str, active=False) -> QIcon:
     image.fill(Qt.GlobalColor.transparent)
     with QPainter(image) as painter:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(ACCENT if active else "#a6afbc"), 1.6))
+        colors = current_palette()
+        painter.setPen(QPen(QColor(colors['accent'] if active else colors['muted_text']), 1.6))
         if kind == "results":
             painter.drawLine(3, 18, 19, 18)
             for x, height in ((5, 7), (10, 12), (15, 15)):
@@ -118,5 +119,5 @@ class ApplicationNavigation(QWidget):
             QPushButton {{background:transparent; border:0; border-radius:5px; text-align:left;
                 padding:10px; color:{colors['muted_text']}; min-height:20px; font-size:12px;}}
             QPushButton:hover {{background:{colors['panel']}; color:{colors['text']};}}
-            QPushButton:checked {{background:{colors['selection']}; color:{ACCENT};}}
+            QPushButton:checked {{background:{colors['selection']}; color:{colors['accent']};}}
         """))

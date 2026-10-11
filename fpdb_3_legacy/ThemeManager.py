@@ -482,15 +482,17 @@ class ThemeManager:
         """Build theme-aware styling for the legacy filter sidebar."""
         c = self.get_legacy_palette()
         dark = self._is_dark(c["window"])
-        sidebar = "#20262b" if dark else c["sidebar"]
-        card = "#222b32" if dark else c["sidebar_panel"]
-        card_hover = "#2f3740" if dark else c["panel_alt"]
-        input_bg = "#20262b" if dark else c["input"]
-        text = "#eef3f7" if dark else c["text"]
-        muted = "#aeb8c2" if dark else c["muted_text"]
+        sidebar = c["sidebar"]
+        card = c["sidebar_panel"]
+        card_hover = c["panel_alt"]
+        input_bg = c["input"]
+        text = c["text"]
+        muted = c["muted_text"]
         accent = c["accent"]
         accent_hover = c["accent_hover"]
         accent_panel = c["accent_soft"]
+        assets = (Path(__file__).resolve().parent.parent / "gfx/ui").as_posix()
+        check = "check.svg" if dark else "check-light.svg"
 
         # Transparent border styles that scale naturally with dark/light themes
         border_rgba = "rgba(255, 255, 255, 0.08)" if dark else "rgba(0, 0, 0, 0.08)"
@@ -546,9 +548,9 @@ class ThemeManager:
 
             /* Boutons d'action principaux (au bas de la sidebar) */
             #filterSidebar QPushButton {{
-                background-color: {accent};
-                color: #ffffff;
-                border: none;
+                background-color: {accent_panel};
+                color: {text};
+                border: 1px solid {accent};
                 border-radius: 5px;
                 padding: 8px 16px;
                 font-weight: bold;
@@ -558,8 +560,8 @@ class ThemeManager:
                 min-height: 32px;
             }}
             #filterSidebar QPushButton:hover {{
-                background-color: {accent_hover};
-                color: #ffffff;
+                background-color: {c['selection_hover']};
+                color: {text};
             }}
             #filterSidebar QPushButton:pressed {{
                 background-color: {accent_panel};
@@ -585,7 +587,7 @@ class ThemeManager:
             }}
             #filterSidebar QGroupBox QPushButton:pressed {{
                 background-color: {accent_panel};
-                color: #ffffff;
+                color: {text};
             }}
 
             /* Cases à cocher et boutons radio modernisés */
@@ -604,7 +606,7 @@ class ThemeManager:
             QCheckBox::indicator {{
                 width: 16px;
                 height: 16px;
-                border: 2px solid {border_rgba};
+                border: 2px solid {c['control_border']};
                 border-radius: 4px;
                 background-color: {input_bg};
             }}
@@ -614,12 +616,12 @@ class ThemeManager:
             QCheckBox::indicator:checked {{
                 background-color: {accent};
                 border-color: {accent};
-                image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
+                image: url('{assets}/{check}');
             }}
             QRadioButton::indicator {{
                 width: 16px;
                 height: 16px;
-                border: 2px solid {border_rgba};
+                border: 2px solid {c['control_border']};
                 border-radius: 9px;
                 background-color: {input_bg};
             }}
@@ -629,13 +631,13 @@ class ThemeManager:
             QRadioButton::indicator:checked {{
                 background-color: {accent};
                 border-color: {accent};
-                image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='6' fill='white'/></svg>");
+                image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='6' fill='{c['on_accent']}'/></svg>");
             }}
 
             /* Champs de saisie */
             QComboBox, QDateEdit, QSpinBox, QLineEdit {{
                 background-color: {input_bg};
-                border: 1px solid {border_rgba};
+                border: 1px solid {c['control_border']};
                 border-radius: 5px;
                 padding: 4px 8px;
                 color: {text};
@@ -650,12 +652,13 @@ class ThemeManager:
             QComboBox QAbstractItemView {{
                 background-color: {input_bg};
                 border: 1px solid {border_rgba};
-                selection-background-color: {accent};
+                selection-background-color: {accent_panel};
                 selection-color: {text};
                 color: {text};
                 padding: 4px;
                 outline: 0px;
             }}
+            QComboBox::item:selected {{ background-color: {accent_panel}; color: {text}; }}
             QComboBox QAbstractItemView::item {{
                 min-height: 28px;
                 padding: 6px 10px;
@@ -763,8 +766,8 @@ class ThemeManager:
             QCalendarWidget QAbstractItemView:enabled {{
                 background-color: {sidebar};
                 color: {text};
-                selection-background-color: {accent};
-                selection-color: {sidebar};
+                selection-background-color: {accent_panel};
+                selection-color: {text};
                 outline: none;
             }}
             QCalendarWidget QAbstractItemView:disabled {{
@@ -789,7 +792,7 @@ class ThemeManager:
                 margin: 0px;
             }}
             QScrollBar::handle:vertical {{
-                background-color: {border_rgba};
+                background-color: {c['control_border']};
                 min-height: 20px;
                 border-radius: 3px;
             }}
@@ -827,6 +830,7 @@ class ThemeManager:
             if not isinstance(base_stylesheet, str):
                 base_stylesheet = ""
             colors = self.get_legacy_palette()
+            app.setProperty("fpdb_color_mode", "dark" if self._is_dark(colors['window']) else "light")
             combined = modernize_stylesheet(base_stylesheet + "\n" + self.build_legacy_app_stylesheet())
             app.setStyleSheet(combined + "\n" + application_stylesheet(colors))
             app.setProperty("fpdb_qt_material_theme", self._qt_material_theme)

@@ -62,6 +62,53 @@ def test_imported_daily_results_match_total_and_four_curves(report):
     assert all(combo.findText("USD") == -1 for combo in report.findChildren(QComboBox))
 
 
+def test_reset_graph_restores_data_after_zoom_and_pan(report, qtbot):
+    report.select_total()
+    view = report.graph.getViewBox()
+    view.setRange(xRange=(100, 110), yRange=(100, 110), padding=0)
+    qtbot.mouseClick(report.reset_graph_button, Qt.MouseButton.LeftButton)
+    x_range, y_range = view.viewRange()
+    assert x_range[0] <= 0 and x_range[1] >= 2
+    assert y_range[0] <= -24 and y_range[1] >= -8
+
+
+def test_hand_viewer_sorts_entire_population_before_pagination(report, qtbot):
+    from PySide6.QtWidgets import QHeaderView
+
+    from fpdb_3_legacy.GuiHandViewer import GuiHandViewer
+
+    ids = sorted(hand.hand_id for hand in report.raw_hands)
+    cursor = report.db.get_cursor()
+    for handid, profit, pot in zip(ids, (100, -900, 500), (900, 3000, 200)):
+        cursor.execute("UPDATE HandsPlayers SET totalProfit=? WHERE handId=?", (profit, handid))
+        cursor.execute("UPDATE Hands SET finalPot=? WHERE id=?", (pot, handid))
+    report.db.commit()
+    viewer = GuiHandViewer(report.conf, report.db.sql, None)
+    qtbot.addWidget(viewer)
+    viewer.page_size = 1
+    viewer.reload_hands(ids)
+    viewer.view.sortByColumn(viewer.colnum["Net"], Qt.SortOrder.DescendingOrder)
+    assert viewer.all_handids == [ids[2], ids[0], ids[1]]
+    assert int(viewer.filterModel.index(0, viewer.colnum["HandId"]).data()) == ids[2]
+    viewer.next_page()
+    assert int(viewer.filterModel.index(0, viewer.colnum["HandId"]).data()) == ids[0]
+    viewer.view.sortByColumn(viewer.colnum["Total Pot"], Qt.SortOrder.DescendingOrder)
+    assert viewer.page == 0
+    assert viewer.all_handids == [ids[1], ids[0], ids[2]]
+    viewer.view.sortByColumn(viewer.colnum["Date"], Qt.SortOrder.AscendingOrder)
+    assert viewer.all_handids == ids
+    for column in ("Street0", "Street1-4", "Players"):
+        viewer.view.sortByColumn(viewer.colnum[column], Qt.SortOrder.DescendingOrder)
+        assert set(viewer.all_handids) == set(ids)
+    viewer.show()
+    viewer.hide()
+    viewer.show()
+    assert viewer.view.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive
+    assert viewer.render_cards("Ah Ks").size().width() == 65
+    assert viewer.render_boards([["Ah", "Ks", "2d"], ["Ac", "Kd", "2s"]]).height() == 76
+    viewer.close_owned_database()
+
+
 def test_calendar_modes_reuse_same_population_and_total_row(report):
     original_workers = len(report._workers)
     for grouping in ("week", "month", "year", "day"):
@@ -74,6 +121,37 @@ def test_calendar_modes_reuse_same_population_and_total_row(report):
     assert report.graph.listDataItems()[0].getData()[1][-1] == -24
     report.line_checks[1].setChecked(False)
     assert not report.graph.listDataItems()[1].isVisible()
+
+
+def test_live_theme_switch_repaints_cards_without_losing_page_or_selection(report, qtbot):
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QColor
+
+    from fpdb_3_legacy.color_tokens import semantic_palette
+    from fpdb_3_legacy.GuiHandViewer import GuiHandViewer
+    from fpdb_3_legacy.ThemeManager import ThemeManager
+
+    viewer = GuiHandViewer(report.conf, report.db.sql, None)
+    qtbot.addWidget(viewer)
+    viewer.page_size = 1
+    viewer.reload_hands([hand.hand_id for hand in report.raw_hands])
+    viewer.next_page()
+    viewer.view.setCurrentIndex(viewer.filterModel.index(0, 0))
+    selected = viewer.filterModel.index(0, viewer.colnum['HandId']).data()
+    manager = ThemeManager()
+    try:
+        for theme, dark in (("light_lightgreen.xml", False), ("dark_lightgreen.xml", True)):
+            assert manager.set_qt_material_theme(theme, save=False, apply_to_ui=True)
+            assert viewer.page == 1
+            assert viewer.view.currentIndex().siblingAtColumn(viewer.colnum['HandId']).data() == selected
+            icon = viewer.model.item(0, viewer.colnum['Street0']).data(Qt.ItemDataRole.DecorationRole)
+            image = icon.pixmap(QSize(700, 160)).toImage()
+            assert image.pixelColor(5, 31).name() == semantic_palette(dark)['card']
+            title_colour = report.graph.getPlotItem().titleLabel.opts['color']
+            assert QColor(title_colour).name() == semantic_palette(dark)['muted_text']
+    finally:
+        manager.set_qt_material_theme("dark_lightgreen.xml", save=False, apply_to_ui=True)
+        viewer.close_owned_database()
 
 
 def test_numeric_sorting_period_selection_and_exact_hand_ids(report, qtbot):

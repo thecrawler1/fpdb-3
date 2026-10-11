@@ -21,8 +21,9 @@ aprovado continua sendo a referência de cores e acabamento.
 ## Implementação
 
 - Design system compartilhado em `design_system.py`, integrado ao ThemeManager.
-- Fundos neutros `#101216`, superfícies discretas, bordas finas, hover/foco claros.
-- Verde **`#78d9a0`**, o mesmo da parte preenchida do stepper do replayer.
+- Paleta perceptual grafite/menta, superfícies graduais, bordas finas e foco claro;
+  fundamentação, cores exatas e medições em [COLOR_SYSTEM.md](COLOR_SYSTEM.md).
+- Verde menta **`#83caa4`**, com saturação contida.
 - Seleção em verde escuro, preservando contraste e legibilidade dos resultados.
 - Textos **25% maiores**, inclusive estilos locais e rich text, com aplicação
   idempotente: atualizar o tema não multiplica novamente os tamanhos.
@@ -36,6 +37,16 @@ aprovado continua sendo a referência de cores e acabamento.
   ficam disponíveis em **Columns**, sem remover os dados do modelo.
 - Toolbar de mãos com **Filters**, **Load hands**, **Columns** e **Replay**.
   Filtros e flags especializados ficam recolhidos inicialmente.
+- Cartas do Hand Viewer cash usam badges compactos de rank/naipe, com superfície
+  grafite intermediária e naipes de alto contraste, inclusive na seleção. As colunas mantêm
+  largura de conteúdo ao alternar entre abas.
+- Menus de selects ajustam a largura às opções completas, incluindo margens do
+  tema, sem exigir que o campo fechado ocupe a mesma largura do menu.
+- Ordenação do Hand Viewer ocorre sobre todos os IDs antes da paginação. Data,
+  cartas, board e valores financeiros usam metadados leves; colunas de ações
+  são reconstruídas sob demanda. O replayer recebe a lista completa nessa ordem.
+- Resultados inclui **Reset view**, que restaura os limites do gráfico após zoom
+  ou deslocamento, preservando o período e as curvas selecionadas.
 - Visualizador de torneios também usa colunas essenciais por padrão.
 - Resultados oferece **Columns**, sincronizando colunas ocultas com a linha Total.
 - Cartas do replayer **25% maiores nominalmente**, com arredondamento para pixels
@@ -43,6 +54,9 @@ aprovado continua sendo a referência de cores e acabamento.
 
 ## Verificação
 
+- Correções de tabela/gráfico: **23 testes direcionados aprovados**, incluindo
+  ordenação financeira entre páginas e restauração do gráfico após zoom/pan.
+  Capturas públicas atualizadas conferidas em `/tmp/opencode/design-review-fixed`.
 - **313 testes direcionados aprovados**: temas/persistência, aplicação repetida,
   navegação, colunas, preferências, filtros, gráficos, resultados, controles,
   variantes, ampliação das cartas e colisões entre apostas/elementos visíveis.

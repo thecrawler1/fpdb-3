@@ -3,8 +3,9 @@
 import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QTextDocument
-from PySide6.QtWidgets import QLabel, QMainWindow, QTableView, QTabWidget, QWidget
+from PySide6.QtWidgets import QComboBox, QLabel, QMainWindow, QTableView, QTabWidget, QWidget
 
+from fpdb_3_legacy.color_science import contrast_ratio
 from fpdb_3_legacy.design_system import (
     ACCENT,
     DesignPolish,
@@ -48,11 +49,42 @@ def test_local_styles_follow_global_policy_once(qapp, qtbot):
     assert label.styleSheet() == first
 
 
+def test_legacy_surfaces_and_selected_combo_items_use_semantic_colours(qapp):
+    from fpdb_3_legacy.design_system import application_stylesheet
+
+    colors = design_palette(True)
+    style = modernize_stylesheet("QFrame {background:#ffffff;} QLabel {color:#edf2f7;} "
+                                "QComboBox::item:selected {background:#bef67a; color:#000000;}")
+    assert f"background:{colors['panel']}" in style
+    assert f"background:{colors['selection']}" in style
+    assert f"color:{colors['text']}" in style
+    assert modernize_stylesheet(style) == style
+    assert "QComboBox::item:selected" in application_stylesheet(colors)
+    assert "#cb48ed" in modernize_stylesheet("QLabel {color:#cb48ed;}")  # Unknown domain colour.
+
+
+def test_local_semantic_styles_follow_light_dark_switch_without_rescaling(qapp):
+    previous = qapp.property("fpdb_color_mode")
+    dark, light = design_palette(True), design_palette(False)
+    try:
+        qapp.setProperty("fpdb_color_mode", "dark")
+        style = modernize_stylesheet(f"QLabel {{background:{dark['panel']}; color:{dark['text']}; font-size:12px;}}")
+        qapp.setProperty("fpdb_color_mode", "light")
+        changed = modernize_stylesheet(style)
+        assert light['panel'] in changed and light['text'] in changed
+        assert "font-size:15px" in changed
+        qapp.setProperty("fpdb_color_mode", "dark")
+        assert modernize_stylesheet(changed) == style
+    finally:
+        qapp.setProperty("fpdb_color_mode", previous)
+
+
 def test_palette_is_neutral_with_stepper_green_and_readable_selection():
     colors = design_palette(True)
-    assert colors["window"] == "#101216" and colors["accent"] == ACCENT
+    assert colors["window"] == "#13181d" and colors["accent"] == ACCENT
     assert colors["selection"] != colors["accent"]
-    assert design_palette(False)["accent"] == ACCENT
+    light = design_palette(False)
+    assert contrast_ratio(light['accent'], light['base']) >= 4.5
 
 
 def _view(qtbot):
@@ -126,6 +158,32 @@ def test_theme_reapplication_does_not_increase_font_or_duplicate_scaled_css(qapp
     assert manager.apply_legacy_polish()
     assert qapp.font().pointSizeF() == font
     assert manager.get_legacy_palette()["accent"] == ACCENT
+
+
+def test_combo_popup_fits_long_options_and_recomputes_after_model_changes(qapp, qtbot):
+    from fpdb_3_legacy.ThemeManager import ThemeManager
+
+    ThemeManager().set_qt_material_theme("dark_lightgreen.xml", save=False, apply_to_ui=True)
+    combo = QComboBox()
+    qtbot.addWidget(combo)
+    combo.setFixedWidth(120)
+    combo.addItems(["All limits", "NL · BB $0.05 / $0.10 — PokerStars"])
+    combo.show()
+    combo.showPopup()
+    qapp.processEvents()
+    view = combo.view()
+    assert view.viewport().width() >= view.sizeHintForColumn(combo.modelColumn())
+    assert view.viewport().width() >= view.fontMetrics().horizontalAdvance(combo.itemText(1)) + 64
+    first_width = view.window().width()
+    combo.hidePopup()
+    combo.addItem("NL · BB $0.05 / $0.10 — PokerStars · six-max cash tables")
+    combo.showPopup()
+    qapp.processEvents()
+    assert view.viewport().width() >= view.sizeHintForColumn(combo.modelColumn())
+    assert view.viewport().width() >= view.fontMetrics().horizontalAdvance(combo.itemText(2)) + 64
+    assert view.window().width() > first_width
+    assert combo.width() == 120
+    combo.hidePopup()
 
 
 def test_hand_viewer_defaults_to_review_columns_with_optional_details(qtbot, legacy_config, fresh_db, tmp_path):

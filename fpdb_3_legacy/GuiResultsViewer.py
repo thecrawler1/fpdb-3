@@ -200,6 +200,9 @@ class GuiResultsViewer(QWidget):
             self.line_checks.append(check)
             options.addWidget(check)
         options.addStretch()
+        self.reset_graph_button = QPushButton(_("Reset view"))
+        self.reset_graph_button.clicked.connect(lambda: self.graph.getViewBox().autoRange())
+        options.addWidget(self.reset_graph_button)
         self.hands_button = QPushButton(_("View hands"))
         options.addWidget(self.hands_button)
         graph_layout.addLayout(options)
@@ -224,6 +227,11 @@ class GuiResultsViewer(QWidget):
         self.units_combo.currentIndexChanged.connect(self._render_graph)
         for check in self.line_checks:
             check.toggled.connect(self._line_visibility)
+
+    def refresh_theme(self, colors=None, theme_colors=None) -> None:
+        """Update local styles, financial text and plotted colours together."""
+        self.setStyleSheet(get_modern_qss())
+        self._rebuild_table()
 
     @staticmethod
     def _table(model) -> QTableView:

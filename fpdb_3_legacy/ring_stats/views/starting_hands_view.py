@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from fpdb_3_legacy.color_science import readable_mix
 from fpdb_3_legacy.holdem_classes import grid_labels
 from fpdb_3_legacy.holdem_ranges import DEFAULT_VIEW, METRICS, RangeCell, RangeMatrix
 from fpdb_3_legacy.holdem_ranges import metric as range_metric
@@ -73,7 +74,9 @@ class HoldemGridCell(QFrame):
 
     def set_color(self, hex_color: str) -> None:
         """Modifie la couleur de fond de la cellule."""
-        self.setStyleSheet(f"QFrame#handCell {{ background-color: {hex_color}; }}")
+        text = get_theme_palette()['text']
+        self.setStyleSheet(f"QFrame#handCell {{ background-color: {hex_color}; }} "
+                          f"QLabel#handCellText {{ background: transparent; color: {text}; }}")
 
     def update_stats(self, n: int, profit: float, vpip: float, color_by: str = "profit") -> None:
         """Met à jour les statistiques de la cellule et son infobulle."""
@@ -155,20 +158,11 @@ class HoldemGridCell(QFrame):
         super().mouseDoubleClickEvent(event)
 
     def _interpolate_color(self, hex1: str, hex2: str, factor: float) -> str:
-        """Calcule une couleur interpolée entre deux couleurs hexa."""
+        """Perceptual interpolation with a readable label at every intensity."""
         try:
-            h1 = hex1.lstrip("#")
-            h2 = hex2.lstrip("#")
-            r1, g1, b1 = int(h1[0:2], 16), int(h1[2:4], 16), int(h1[4:6], 16)
-            r2, g2, b2 = int(h2[0:2], 16), int(h2[2:4], 16), int(h2[4:6], 16)
-
-            r = int(r1 + factor * (r2 - r1))
-            g = int(g1 + factor * (g2 - g1))
-            b = int(b1 + factor * (b2 - b1))
-
-            return f"#{r:02x}{g:02x}{b:02x}"
+            return readable_mix(hex1, hex2, get_theme_palette()['text'], factor)
         except (AttributeError, IndexError, TypeError, ValueError):
-            return hex2
+            return hex1
 
 
 class OmahaChartsWidget(pg.GraphicsLayoutWidget):

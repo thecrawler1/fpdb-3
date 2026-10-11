@@ -51,7 +51,7 @@ class ProfitGraphWidget(pg.PlotWidget):
             self.setLabel("left", units)
             self.setLabel("bottom", _("Hands"))
         if title is not None:
-            self.setTitle(title)
+            self.setTitle(title, color=get_theme_palette()["muted_text"])
 
         if not profits:
             return
@@ -89,18 +89,18 @@ class ProfitGraphWidget(pg.PlotWidget):
 
         # 2. Showdown Profit (Bleu)
         if len(blue) > 0:
-            self.plot(x, blue, pen=pg.mkPen(color=c.get("graph_showdown", "#3182ce"), width=1.5, style=Qt.PenStyle.DashLine), name="Showdown")
+            self.plot(x, blue, pen=pg.mkPen(color=c.get("graph_showdown", "#3182ce"), width=2), name="Showdown")
 
         # 3. Non-Showdown Profit (Rouge)
         if len(red) > 0:
-            self.plot(x, red, pen=pg.mkPen(color=color_down, width=1.5, style=Qt.PenStyle.DashLine), name="Non-Showdown")
+            self.plot(x, red, pen=pg.mkPen(color=color_down, width=2), name="Non-Showdown")
 
         # 4. All-In EV (Orange)
         if len(ev) > 0 and (show_all_lines or not np.all(ev == 0)):
-            self.plot(x, ev, pen=pg.mkPen(color=c.get("graph_ev", "#dd6b20"), width=1.5), name="All-In EV")
+            self.plot(x, ev, pen=pg.mkPen(color=c.get("graph_ev", "#dd6b20"), width=2), name="All-In EV")
 
         if len(nosplash) > 0 and not np.array_equal(nosplash, green):
-            self.plot(x, nosplash, pen=pg.mkPen(color=c.get("graph_no_splash", "#ed8936"), width=1.5, style=Qt.PenStyle.DashLine), name="Net profit excluding splash")
+            self.plot(x, nosplash, pen=pg.mkPen(color=c.get("graph_no_splash", "#ed8936"), width=2), name="Net profit excluding splash")
 
 
 class DashboardTab(QWidget):

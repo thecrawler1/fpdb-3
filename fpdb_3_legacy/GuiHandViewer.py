@@ -24,14 +24,12 @@ from functools import partial
 from io import StringIO
 from typing import Any
 
-from PySide6.QtCore import QCoreApplication, QSortFilterProxyModel, Qt
+from PySide6.QtCore import QCoreApplication, QSize, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QDoubleValidator,
     QIntValidator,
-    QPainter,
-    QPixmap,
     QStandardItem,
     QStandardItemModel,
 )
@@ -62,6 +60,7 @@ from PySide6.QtWidgets import (
 
 from fpdb_3_legacy import SQL, Card, Configuration, Database, Deck, Filters, GuiReplayer, Hand, gui_empty_state
 from fpdb_3_legacy.analytics_query import escape_literal_percent
+from fpdb_3_legacy.design_system import current_palette
 from fpdb_3_legacy.hand_review_dialog import add_review_action
 from fpdb_3_legacy.hand_share_dialog import add_share_actions
 from fpdb_3_legacy.hand_viewer_filters import build_filter_clauses, required_analytics_subsystems
@@ -69,9 +68,19 @@ from fpdb_3_legacy.holdem_classes import RANKS, grid_labels
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_datetime, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
+from fpdb_3_legacy.table_cards import card_tokens, render_table_cards, table_card_icon
 from fpdb_3_legacy.table_columns import install_column_controls
 
 log = get_logger("gui_hand_viewer")
+
+
+class PagedHandProxy(QSortFilterProxyModel):
+    """Ask the viewer to sort its complete ID list, never just this page."""
+
+    sort_requested = Signal(int, object)
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder) -> None:
+        self.sort_requested.emit(column, order)
 
 
 class StartingHandPickerDialog(QDialog):
@@ -252,12 +261,14 @@ class GuiHandViewer(QSplitter):
             "Splash": 18,
         }
         self.view = QTableView()
+        self.view.setIconSize(QSize(700, 160))
         self.view.horizontalHeader().setMinimumSectionSize(90)
-        self.view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.view.horizontalHeader().setStretchLastSection(False)
         self.view.setSelectionBehavior(QTableView.SelectRows)
         self.handsVBox.addWidget(self.view)
         self.model = QStandardItemModel(0, len(self.colnum), self.view)
-        self.filterModel = QSortFilterProxyModel()
+        self.filterModel = PagedHandProxy()
         self.filterModel.setSourceModel(self.model)
         self.filterModel.setSortRole(Qt.ItemDataRole.UserRole)
 
@@ -314,6 +325,10 @@ class GuiHandViewer(QSplitter):
         self.all_handids: list[Any] = []
         self.page = 0
         self.page_size = 100
+        self._sort_column = self.colnum["Date"]
+        self._sort_order = Qt.SortOrder.DescendingOrder
+        self._sort_keys = {}
+        self.filterModel.sort_requested.connect(self._sort_hands)
 
         self.pagerBox = QHBoxLayout()
         self.prevPageButton = QPushButton(_("◀ Prev"))
@@ -725,12 +740,52 @@ class GuiHandViewer(QSplitter):
     def reload_hands(self, handids) -> None:
         self.hands: dict[Any, Any] = {}
         self.all_handids = list(handids)
+        self._sort_keys = {}
         self.page = 0
         self.model.removeRows(0, self.model.rowCount())
         if len(self.all_handids) == 0:
             self._update_pager()
             gui_empty_state.show_no_data(self, context="Hand viewer", db=self.db)
             return
+        self._sort_hands(self._sort_column, self._sort_order)
+
+    def _sort_hands(self, column, order) -> None:
+        if column < 0:
+            return
+        self._sort_column, self._sort_order = column, order
+        if not self.all_handids:
+            return
+        from fpdb_3_legacy.hand_table_sort import load_sort_keys
+
+        name = next(key for key, index in self.colnum.items() if index == column)
+        if name not in self._sort_keys:
+            heroes = {site: self.config.get_hero_aliases(site) or [hero]
+                      for site, hero in self.filters.getHeroes().items()}
+            keys = load_sort_keys(self.db, self.all_handids, name, heroes)
+            if keys is None:
+                # Uncommon action/combo columns require reconstructed hand data.
+                # Build only their sort values once, without changing the visible page.
+                keys = {}
+                visible_model = self.model
+                scratch = QStandardItemModel()
+                try:
+                    self.model = scratch
+                    for handid in self.all_handids:
+                        hand = self.hands.get(handid)
+                        if hand is None:
+                            hand = self.importhand(handid)
+                        self.addHandRow(handid, hand)
+                        item = scratch.item(0, column)
+                        keys[handid] = item.text() if item is not None else ""
+                        scratch.removeRows(0, scratch.rowCount())
+                finally:
+                    self.model = visible_model
+                    scratch.deleteLater()
+            self._sort_keys[name] = keys
+        keys = self._sort_keys[name]
+        self.all_handids.sort(key=lambda handid: (keys.get(handid, ""), handid),
+                              reverse=order == Qt.SortOrder.DescendingOrder)
+        self.page = 0
         self.render_page()
 
     def page_count(self) -> int:
@@ -764,6 +819,19 @@ class GuiHandViewer(QSplitter):
             progress.close()
         self.view.resizeColumnsToContents()
         self._update_pager()
+
+    def refresh_theme(self, colors=None, theme_colors=None) -> None:
+        """Redraw cached card icons and financial colours after a palette change."""
+        if not getattr(self, "hands", None):
+            return
+        current = self.view.currentIndex()
+        selected = current.siblingAtColumn(self.colnum["HandId"]).data() if current.isValid() else None
+        self.render_page()
+        if selected is not None:
+            for row in range(self.model.rowCount()):
+                if self.model.item(row, self.colnum["HandId"]).text() == str(selected):
+                    self.view.setCurrentIndex(self.filterModel.mapFromSource(self.model.index(row, 0)))
+                    break
 
     def _update_pager(self) -> None:
         total = len(self.all_handids)
@@ -879,18 +947,19 @@ class GuiHandViewer(QSplitter):
             net_f = float(net)
         except (TypeError, ValueError):
             net_f = 0.0
-        win_color, lose_color, neutral = QColor("#3fb56b"), QColor("#d66b6b"), QColor("#c4cdd4")
+        colors = current_palette()
+        win_color, lose_color, neutral = (QColor(colors[role]) for role in ("success", "danger", "text"))
 
         for name, idx in ordered:
             item = modelrow[idx]
             item.setEditable(False)
             if name == "Street0":
-                item.setData(self.render_cards(holestr), Qt.ItemDataRole.DecorationRole)
+                item.setData(table_card_icon(self.render_cards(holestr)), Qt.ItemDataRole.DecorationRole)
                 item.setData("", Qt.ItemDataRole.DisplayRole)
                 item.setData(holestr, Qt.ItemDataRole.UserRole + 1)
             elif name == "Street1-4":
                 flat = " ".join(c for run in board_runs for c in run)
-                item.setData(self.render_boards(board_runs), Qt.ItemDataRole.DecorationRole)
+                item.setData(table_card_icon(self.render_boards(board_runs)), Qt.ItemDataRole.DecorationRole)
                 item.setData("", Qt.ItemDataRole.DisplayRole)
                 item.setData(flat, Qt.ItemDataRole.UserRole + 1)
             elif name in ("Bet", "Net", "Won", "Total Pot", "Rake"):
@@ -912,16 +981,16 @@ class GuiHandViewer(QSplitter):
                 except (TypeError, ValueError):
                     pass
             elif name == "Flags":
-                item.setForeground(QBrush(QColor("#ffd34d")))
+                item.setForeground(QBrush(QColor(colors["warning"])))
             elif name == "Game":
                 # Keep the raw category for the card filter / sorting.
                 item.setData(category, Qt.ItemDataRole.UserRole)
 
         # Subtle row tint by result.
         if net_f > 0:
-            tint = QColor(40, 90, 60, 60)
+            tint = QColor(colors["result_positive_bg"])
         elif net_f < 0:
-            tint = QColor(90, 45, 45, 60)
+            tint = QColor(colors["result_negative_bg"])
         else:
             tint = None
         tip = self._hand_tooltip(hand, hero, won, net)
@@ -1027,23 +1096,7 @@ class GuiHandViewer(QSplitter):
 
     def render_boards(self, runs):
         """Render one or more run boards stacked vertically (run-it-twice/three)."""
-        runs = [r for r in runs if r] or [["0x"]]
-        card_width, card_height, gap = 30, 42, 3
-        max_cards = max(len(r) for r in runs)
-        width = card_width * max_cards
-        height = card_height * len(runs) + gap * (len(runs) - 1)
-        pixbuf = QPixmap(width, height)
-        pixbuf.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixbuf)
-        y = 0
-        for run in runs:
-            x = 0
-            for c in run:
-                painter.drawPixmap(x, y, self.cardImages[Card.encodeCard(c)])
-                x += card_width
-            y += card_height + gap
-        painter.end()
-        return pixbuf
+        return render_table_cards(runs)
 
     def _hand_tooltip(self, hand, hero, won, net) -> str:
         lines = [
@@ -1120,7 +1173,7 @@ class GuiHandViewer(QSplitter):
     def row_activated(self, index) -> None:
         try:
             hand_id = int(index.sibling(index.row(), self.colnum["HandId"]).data())
-            handlist = sorted(self.hands.keys())
+            handlist = list(self.all_handids)
             hand_index = handlist.index(hand_id)
 
             if getattr(self, "replayer", None) is not None and self.replayer.isVisible():
@@ -1154,25 +1207,7 @@ class GuiHandViewer(QSplitter):
         return h
 
     def render_cards(self, cardstring):
-        card_width = 30
-        card_height = 42
-        if cardstring is None or cardstring == "":
-            cardstring = "0x"
-        cardstring = cardstring.replace("'", "")
-        cardstring = cardstring.replace("[", "")
-        cardstring = cardstring.replace("]", "")
-        cardstring = cardstring.replace("'", "")
-        cardstring = cardstring.replace(",", "")
-        cards = [Card.encodeCard(c) for c in cardstring.split(" ")]
-        n_cards = len(cards)
-
-        pixbuf = QPixmap(card_width * n_cards, card_height)
-        painter = QPainter(pixbuf)
-        x = 0  # x coord where the next card starts in pixbuf
-        for card in cards:
-            painter.drawPixmap(x, 0, self.cardImages[card])
-            x += card_width
-        return pixbuf
+        return render_table_cards([card_tokens(cardstring)])
 
 
 def main(argv=None):
