@@ -165,6 +165,12 @@ class TourHandViewer(QSplitter):
 
         self.view.resizeColumnsToContents()
         self.view.setSortingEnabled(True)
+        from fpdb_3_legacy.table_columns import install_column_controls
+
+        self.columnControls = install_column_controls(
+            self.view, "tournament-hands", essential=("Stakes", "Pos", "Street0", "Street1-4", "Net", "Total Pot"),
+            keys={index: key for key, index in self.colnum.items()},
+        )
 
     def close_owned_database(self) -> None:
         """Release the connection created for this tab."""

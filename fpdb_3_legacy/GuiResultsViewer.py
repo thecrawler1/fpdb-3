@@ -45,6 +45,7 @@ from fpdb_3_legacy.period_results import (
 from fpdb_3_legacy.ring_stats.base import DbWorker
 from fpdb_3_legacy.ring_stats.styles import get_modern_qss, get_theme_palette
 from fpdb_3_legacy.ring_stats.views.dashboard_view import ProfitGraphWidget
+from fpdb_3_legacy.table_columns import install_column_controls
 
 PERIOD_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 HEADINGS = ("Period", "Hands", "VPIP", "PFR", "Profit ($)", "bb/100", "EV ($)", "EV bb/100")
@@ -136,8 +137,12 @@ class GuiResultsViewer(QWidget):
         self.more_filters = QToolButton()
         self.more_filters.setText(_("More filters"))
         self.more_filters.setCheckable(True)
+        self.columns_button = QToolButton()
+        self.columns_button.setText(_("Columns"))
+        self.columns_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.refresh_button = QPushButton(_("Refresh"))
         toolbar.addWidget(self.more_filters)
+        toolbar.addWidget(self.columns_button)
         toolbar.addWidget(self.refresh_button)
         layout.addLayout(toolbar)
         self.filter_panel = QWidget()
@@ -167,14 +172,16 @@ class GuiResultsViewer(QWidget):
         self.proxy.setSourceModel(self.model)
         self.proxy.setSortRole(Qt.ItemDataRole.UserRole)
         self.table = self._table(self.proxy)
+        self.table.setObjectName("calendarResultsTable")
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
         table_layout.addWidget(self.table)
         self.total_model = QStandardItemModel(0, len(HEADINGS), self)
         self.total_table = self._table(self.total_model)
+        self.total_table.setObjectName("calendarResultsTotal")
         self.total_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.total_table.horizontalHeader().hide()
-        self.total_table.setFixedHeight(38)
+        self.total_table.setFixedHeight(48)
         table_layout.addWidget(self.total_table)
         self.splitter.addWidget(table_panel)
         graph_panel = QWidget()
@@ -203,6 +210,11 @@ class GuiResultsViewer(QWidget):
         self._connect_view_actions()
 
     def _connect_view_actions(self) -> None:
+        self.column_controls = install_column_controls(
+            self.table, "calendar-results", essential=HEADINGS, keys=dict(enumerate(HEADINGS)),
+        )
+        self.column_controls.visibility_changed.connect(lambda column, visible: self.total_table.setColumnHidden(column, not visible))
+        self.columns_button.setMenu(self.column_controls.menu())
         self.table.horizontalHeader().sectionResized.connect(self._sync_total_columns)
         self.table.selectionModel().currentRowChanged.connect(self._period_selected)
         self.table.clicked.connect(self._period_selected)
@@ -408,6 +420,7 @@ class GuiResultsViewer(QWidget):
 
     def _sync_total_columns(self, *_args) -> None:
         for column in range(len(HEADINGS)):
+            self.total_table.setColumnHidden(column, self.table.isColumnHidden(column))
             self.total_table.setColumnWidth(column, self.table.columnWidth(column))
 
     def _period_selected(self, current, _previous=None) -> None:

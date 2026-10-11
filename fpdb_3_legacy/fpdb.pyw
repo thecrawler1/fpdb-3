@@ -2303,7 +2303,16 @@ class fpdb(QMainWindow):
         self.nb: QTabWidget = QTabWidget()
         self.nb.setTabsClosable(True)
         self.nb.tabCloseRequested.connect(self.close_tab)
-        self.central_layout.addWidget(self.nb)
+        from fpdb_3_legacy.app_navigation import ApplicationNavigation
+
+        self.application_navigation = ApplicationNavigation(self)
+        self.application_navigation.setEnabled(False)
+        workspace = QHBoxLayout()
+        workspace.setContentsMargins(0, 0, 0, 0)
+        workspace.setSpacing(0)
+        workspace.addWidget(self.application_navigation)
+        workspace.addWidget(self.nb, 1)
+        self.central_layout.addLayout(workspace, 1)
         self.setCentralWidget(self.central_widget)
 
         self.createMenuBar()
@@ -2324,6 +2333,7 @@ class fpdb(QMainWindow):
         self._suppress_db_warning = True
         self.load_profile(create_db=True)
         self._ensure_database_or_prompt()
+        self.application_navigation.setEnabled(True)
         self._suppress_db_warning = False
 
         # Register GUI observer (ConfigurationManager already initialized dans load_profile)

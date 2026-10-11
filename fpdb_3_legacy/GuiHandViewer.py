@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
@@ -54,6 +55,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -67,6 +69,7 @@ from fpdb_3_legacy.holdem_classes import RANKS, grid_labels
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_datetime, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
+from fpdb_3_legacy.table_columns import install_column_controls
 
 log = get_logger("gui_hand_viewer")
 
@@ -109,7 +112,8 @@ class StartingHandPickerDialog(QDialog):
                 button = QPushButton(hand)
                 button.setCheckable(True)
                 button.setChecked(hand in self._selected)
-                button.setFixedSize(42, 28)
+                button.setFixedSize(52, 35)
+                button.setStyleSheet("padding:0; min-width:0; min-height:0;")
                 button.toggled.connect(lambda checked, value=hand: self._set_selected(value, checked))
                 self._buttons[hand] = button
                 grid.addWidget(button, row, column)
@@ -194,6 +198,28 @@ class GuiHandViewer(QSplitter):
         self.handsFrame.setObjectName("handsSurface")
         self.handsVBox = QVBoxLayout()
         self.handsFrame.setLayout(self.handsVBox)
+        toolbar = QHBoxLayout()
+        title = QLabel(_("Hands"))
+        title.setStyleSheet("font-size:20px; font-weight:600;")
+        toolbar.addWidget(title)
+        toolbar.addStretch()
+        self.filtersButton = QPushButton(_("Filters"))
+        self.filtersButton.setCheckable(True)
+        self.filtersButton.toggled.connect(scroll.setVisible)
+        toolbar.addWidget(self.filtersButton)
+        self.loadButton = QPushButton(_("Load hands"))
+        self.loadButton.clicked.connect(self.loadHands)
+        toolbar.addWidget(self.loadButton)
+        self.columnsButton = QToolButton()
+        self.columnsButton.setText(_("Columns"))
+        self.columnsButton.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        toolbar.addWidget(self.columnsButton)
+        self.replayButton = QPushButton(_("Replay"))
+        self.replayButton.setProperty("primaryAction", True)
+        self.replayButton.clicked.connect(self._replay_selected)
+        toolbar.addWidget(self.replayButton)
+        self.handsVBox.addLayout(toolbar)
+        scroll.hide()
 
         self.addWidget(scroll)
         self.addWidget(self.handsFrame)
@@ -226,6 +252,8 @@ class GuiHandViewer(QSplitter):
             "Splash": 18,
         }
         self.view = QTableView()
+        self.view.horizontalHeader().setMinimumSectionSize(90)
+        self.view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.view.setSelectionBehavior(QTableView.SelectRows)
         self.handsVBox.addWidget(self.view)
         self.model = QStandardItemModel(0, len(self.colnum), self.view)
@@ -257,6 +285,15 @@ class GuiHandViewer(QSplitter):
                 "SiteHandId",
                 "Splash",
             ],
+        )
+        self.columnControls = install_column_controls(
+            self.view, "cash-hands", essential=("Date", "Stakes", "Pos", "Street0", "Street1-4", "Net", "Total Pot"),
+            keys={index: key for key, index in self.colnum.items()},
+        )
+        self.columnsButton.setMenu(self.columnControls.menu())
+        self.replayButton.setEnabled(False)
+        self.view.selectionModel().currentRowChanged.connect(
+            lambda current, _old: self.replayButton.setEnabled(current.isValid()),
         )
 
         self.view.doubleClicked.connect(self.row_activated)
@@ -303,6 +340,9 @@ class GuiHandViewer(QSplitter):
             "Bomb": "bomb pot",
             "2xB": "double board",
         }
+        self.flagFilters = QWidget()
+        flags_layout = QHBoxLayout(self.flagFilters)
+        flags_layout.setContentsMargins(0, 0, 0, 0)
         for cb in (
             self.flagAllIn,
             self.flagShowdown,
@@ -313,19 +353,28 @@ class GuiHandViewer(QSplitter):
         ):
             cb.setToolTip(_("Filter: ") + _flag_tips[cb.text()])
             cb.stateChanged.connect(lambda _state: self.loadHands(None))
-            self.pagerBox.addWidget(cb)
+            flags_layout.addWidget(cb)
         self.flagSplashPot = QComboBox()
         self.flagSplashPot.addItem(_("All hands"), "all")
         self.flagSplashPot.addItem(_("Splash pots only"), "only")
         self.flagSplashPot.addItem(_("Exclude splash pots"), "exclude")
         self.flagSplashPot.setToolTip(_("Filter: splash pot"))
         self.flagSplashPot.currentIndexChanged.connect(lambda _index: self.loadHands(None))
-        self.pagerBox.addWidget(self.flagSplashPot)
+        flags_layout.addWidget(self.flagSplashPot)
+        flags_layout.addStretch()
+        self.flagFilters.hide()
+        self.filtersButton.toggled.connect(self.flagFilters.setVisible)
+        self.handsVBox.addWidget(self.flagFilters)
         self.handsVBox.addLayout(self.pagerBox)
         self._update_pager()
 
         self.view.resizeColumnsToContents()
         self.view.setSortingEnabled(True)
+
+    def _replay_selected(self) -> None:
+        index = self.view.currentIndex()
+        if index.isValid():
+            self.row_activated(index)
 
     def _build_advanced_filters(self) -> QGroupBox:
         group = QGroupBox(_("Advanced review filters"))
