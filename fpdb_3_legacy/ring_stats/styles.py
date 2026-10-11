@@ -6,6 +6,7 @@ synchronisées avec le ThemeManager de FPDB.
 
 from __future__ import annotations
 
+from fpdb_3_legacy.design_system import modernize_stylesheet
 from fpdb_3_legacy.ThemeManager import ThemeManager
 
 
@@ -52,7 +53,7 @@ def get_modern_qss() -> str:
     alt_bg_rgba = "rgba(255, 255, 255, 0.02)" if dark else "rgba(0, 0, 0, 0.02)"
     card_border_rgba = "rgba(255, 255, 255, 0.12)" if dark else "rgba(0, 0, 0, 0.12)"
 
-    return f"""
+    return modernize_stylesheet(f"""
     /* Style général des onglets - Flat / Web moderne */
     QTabWidget::panel {{
         border: 1px solid {border_rgba};
@@ -112,7 +113,7 @@ def get_modern_qss() -> str:
     QTableView {{
         background-color: {bg_base};
         gridline-color: transparent; /* Masquer la grille système par défaut */
-        selection-background-color: {accent};
+        selection-background-color: {c['selection']};
         selection-color: #ffffff;
         border: 1px solid {border_rgba};
         border-radius: 8px;
@@ -125,7 +126,7 @@ def get_modern_qss() -> str:
         border-bottom: 1px solid {grid_rgba}; /* Ligne horizontale uniquement */
     }}
     QTableView::item:selected {{
-        background-color: {accent};
+        background-color: {c['selection']};
         color: #ffffff;
     }}
     QHeaderView::section {{
@@ -133,14 +134,14 @@ def get_modern_qss() -> str:
         color: {muted_color};
         padding: 10px 12px;
         border: none;
-        border-bottom: 2px solid {accent}; /* Soulignement de l'en-tête */
+        border-bottom: 1px solid {border_color};
         font-weight: bold;
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }}
     QHeaderView::section:hover {{
-        background-color: {accent};
+        background-color: {c['panel_alt']};
         color: #ffffff;
     }}
 
@@ -248,4 +249,4 @@ def get_modern_qss() -> str:
         font-weight: bold;
         color: {text_color};
     }}
-    """
+    """)

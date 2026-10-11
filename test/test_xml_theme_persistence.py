@@ -62,7 +62,7 @@ class TestXMLThemePersistence(unittest.TestCase):
         theme_manager.initialize(config=config)
 
         # Verify initial state (should have defaults)
-        self.assertEqual(theme_manager.get_qt_material_theme(), "dark_purple.xml")
+        self.assertEqual(theme_manager.get_qt_material_theme(), "dark_lightgreen.xml")
         self.assertEqual(theme_manager.get_popup_theme(), "material_dark")
 
         # Change themes
@@ -123,7 +123,7 @@ class TestXMLThemePersistence(unittest.TestCase):
         theme_manager.initialize(config=config)
 
         # Should fall back to defaults
-        self.assertEqual(theme_manager.get_qt_material_theme(), "dark_purple.xml")
+        self.assertEqual(theme_manager.get_qt_material_theme(), "dark_lightgreen.xml")
         self.assertEqual(theme_manager.get_popup_theme(), "material_dark")
 
         # Now save themes and verify they're added to XML

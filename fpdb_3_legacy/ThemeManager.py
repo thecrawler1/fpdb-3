@@ -15,6 +15,13 @@ from typing import Any, ClassVar
 import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
+from fpdb_3_legacy.design_system import (
+    STYLE_MARKER,
+    application_stylesheet,
+    design_palette,
+    install_design,
+    modernize_stylesheet,
+)
 from fpdb_3_legacy.loggingFpdb import get_logger
 
 log = get_logger("theme_manager")
@@ -71,7 +78,7 @@ class ThemeManager:
     def __init__(self):
         if not hasattr(self, "initialized"):
             self.initialized = False
-            self._qt_material_theme = "dark_purple.xml"
+            self._qt_material_theme = "dark_lightgreen.xml"
             self._popup_theme = "material_dark"
             self._config: Any | None = None
             self._main_window = None
@@ -205,7 +212,7 @@ class ThemeManager:
         sidebar_panel = self._tone(window, 96 if dark else 102)
         table_header = self._tone(highlight, 58 if dark else 180)
         table_header_hover = self._tone(highlight, 72 if dark else 165)
-        return {
+        colors = {
             "window": window,
             "base": base,
             "app_header": self._tone(window, 88 if dark else 108),
@@ -243,6 +250,8 @@ class ThemeManager:
             "graph_down": "#ef4444" if dark else "#b91c1c",
             "graph_purple": "#a78bfa" if dark else "#7c3aed",
         }
+        colors.update(design_palette(dark))
+        return colors
 
     def get_theme_colors(self) -> dict[str, str]:
         """Return colors used by the legacy graph viewers (PyQtGraph since #228)."""
@@ -808,9 +817,21 @@ class ThemeManager:
                 log.warning("No QApplication instance found for legacy theme polish")
                 return False
 
-            base_stylesheet = self._strip_legacy_polish(app.styleSheet() or "")
-            app.setStyleSheet(base_stylesheet + "\n" + self.build_legacy_app_stylesheet())
+            current_style = app.styleSheet() or ""
+            real_stylesheet = isinstance(current_style, str)
+            if not real_stylesheet:
+                current_style = ""
+            if STYLE_MARKER not in current_style:
+                app.setProperty("fpdb_material_source", self._strip_legacy_polish(current_style))
+            base_stylesheet = app.property("fpdb_material_source") or ""
+            if not isinstance(base_stylesheet, str):
+                base_stylesheet = ""
+            colors = self.get_legacy_palette()
+            combined = modernize_stylesheet(base_stylesheet + "\n" + self.build_legacy_app_stylesheet())
+            app.setStyleSheet(combined + "\n" + application_stylesheet(colors))
             app.setProperty("fpdb_qt_material_theme", self._qt_material_theme)
+            if real_stylesheet:
+                install_design(app, colors)
 
             colors = self.get_legacy_palette()
             theme_colors = self.get_theme_colors()
@@ -832,7 +853,7 @@ class ThemeManager:
                     widget.setAlternatingRowColors(True)
                     widget.setStyleSheet("")
                     if hasattr(widget, "setShowGrid"):
-                        widget.setShowGrid(True)
+                        widget.setShowGrid(False)
                     header = getattr(widget, "horizontalHeader", lambda: None)()
                     if header:
                         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -905,7 +926,9 @@ class ThemeManager:
             # Load from XML configuration
             general = getattr(self._config, "general", {})
 
-            saved_qt_theme = general.get("qt_material_theme", "dark_purple.xml")
+            saved_qt_theme = general.get("qt_material_theme", "dark_lightgreen.xml")
+            if saved_qt_theme == "dark_purple.xml":
+                saved_qt_theme = "dark_lightgreen.xml"
             saved_popup_theme = general.get("popup_theme", "material_dark")
 
             # Validate themes
@@ -1249,7 +1272,7 @@ class ThemeManager:
         Returns:
             bool: True if successful
         """
-        return self.set_global_theme("dark_purple.xml", "material_dark")
+        return self.set_global_theme("dark_lightgreen.xml", "material_dark")
 
     def install_custom_theme(self, theme_file_path: str, theme_name: str | None = None) -> bool:
         """Install a custom theme from file.

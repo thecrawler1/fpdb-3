@@ -83,7 +83,7 @@ class TestThemeManager(unittest.TestCase):
         self.theme_manager.initialize(config=self.mock_config)
 
         # Should fallback to defaults
-        self.assertEqual(self.theme_manager.get_qt_material_theme(), "dark_purple.xml")
+        self.assertEqual(self.theme_manager.get_qt_material_theme(), "dark_lightgreen.xml")
         self.assertEqual(self.theme_manager.get_popup_theme(), "material_dark")
 
     def test_set_qt_material_theme_valid(self):
@@ -109,7 +109,7 @@ class TestThemeManager(unittest.TestCase):
         result = self.theme_manager.set_qt_material_theme("invalid_theme.xml")
 
         self.assertFalse(result, "Setting invalid theme should fail")
-        self.assertEqual(self.theme_manager.get_qt_material_theme(), "dark_purple.xml")  # Should remain unchanged
+        self.assertEqual(self.theme_manager.get_qt_material_theme(), "dark_lightgreen.xml")  # Migrated default stays unchanged.
 
     def test_set_popup_theme_valid(self):
         """Test setting a valid popup theme."""
@@ -199,7 +199,7 @@ class TestThemeManager(unittest.TestCase):
         result = self.theme_manager.reset_to_defaults()
 
         self.assertTrue(result, "Reset to defaults should succeed")
-        self.assertEqual(self.theme_manager.get_qt_material_theme(), "dark_purple.xml")
+        self.assertEqual(self.theme_manager.get_qt_material_theme(), "dark_lightgreen.xml")
         self.assertEqual(self.theme_manager.get_popup_theme(), "material_dark")
 
     def test_save_themes_no_config(self):
