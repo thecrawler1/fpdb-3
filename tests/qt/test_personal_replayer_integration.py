@@ -325,11 +325,12 @@ def test_transport_press_feedback_preserves_hit_area_and_release_click(qtbot, hi
     assert button.iconSize().width() == 30
 
 
-def test_larger_type_preserves_original_card_dimensions(history_replayer):
+def test_text_and_replayer_cards_grow_by_25_percent(history_replayer):
     font = replay_font("DejaVu Sans", 10, QFont.Weight.Bold)
-    assert font.pointSizeF() == 15
+    assert font.pointSizeF() == 18.75
     layout = build_replay_layout(1280, 720, [f"p{i}" for i in range(6)], "p0", "holdem")
-    assert (layout.card_width, layout.card_height) == (56, 72)
+    assert abs(layout.card_width - 56 * 1.25) <= 1
+    assert abs(layout.card_height - 72 * 1.25) <= 1
 
 
 def test_big_blind_toggle_converts_history_and_stacks_without_changing_state(qtbot, history_replayer):

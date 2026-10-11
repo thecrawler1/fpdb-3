@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
 )
 
 from fpdb_3_legacy import SQL, Card, Configuration, Database, Deck, Hand
+from fpdb_3_legacy.design_system import CARD_SCALE
 from fpdb_3_legacy.equity import EquityUnavailableError, calculate_equity
 from fpdb_3_legacy.hand_review_dialog import HandReviewDialog
 from fpdb_3_legacy.hand_share import big_blind, supports_bb_amounts
@@ -76,8 +77,8 @@ from fpdb_3_legacy.replayer_style import REPLAYER_STYLE, replay_font
 
 log = get_logger("gui_replayer")
 
-CARD_HEIGHT = 90
-CARD_WIDTH = 70
+CARD_HEIGHT = round(90 * CARD_SCALE)
+CARD_WIDTH = round(70 * CARD_SCALE)
 PLAYER_PANEL_WIDTH = 220
 PLAYER_PANEL_HEIGHT = 72
 CONTROL_RESERVED_HEIGHT = 148
@@ -654,6 +655,8 @@ def build_replay_layout(
     card_spacing = card_width + CARD_GAP
 
     board_width = min(card_width * 5 + 20, table_width * 0.46)
+    if category in {"studhi", "studhilo", "razz", "27_3draw", "27_1draw", "badugi", "5_draw"}:
+        board_width = 0
     board_rect = QRectF(
         table_rect.center().x() - board_width / 2,
         table_rect.center().y() - card_height / 2 - table_rect.height() * 0.04,

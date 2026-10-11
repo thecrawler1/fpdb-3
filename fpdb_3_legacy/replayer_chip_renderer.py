@@ -6,6 +6,7 @@ from math import sqrt
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 
+from fpdb_3_legacy.design_system import TEXT_SCALE
 from fpdb_3_legacy.replayer_chips import ChipStack, chip_stacks
 from fpdb_3_legacy.replayer_style import replay_font
 
@@ -16,7 +17,7 @@ def _draw_denomination(painter: QPainter, stack: ChipStack, top: QRectF, color: 
     if "." in denomination:
         denomination = denomination.rstrip("0").rstrip(".")
     font = QFont("DejaVu Sans", 7, QFont.Weight.Bold)
-    font.setPixelSize(10)
+    font.setPixelSize(round(10 * TEXT_SCALE))
     painter.setFont(font)
     while painter.fontMetrics().horizontalAdvance(denomination) > top.width() - 6 and font.pixelSize() > 6:
         font.setPixelSize(font.pixelSize() - 1)

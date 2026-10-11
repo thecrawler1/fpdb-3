@@ -2,7 +2,9 @@
 
 from PySide6.QtGui import QFont
 
-FONT_SCALE = 1.5
+from fpdb_3_legacy.design_system import TEXT_SCALE, modernize_stylesheet
+
+FONT_SCALE = 1.5 * TEXT_SCALE
 
 
 def replay_font(family: str, size: float, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
@@ -44,3 +46,4 @@ QListWidget::item:selected { background: #293b32; color: #eef1f5; }
 QListWidget::item:hover { background: #252c32; }
 QListWidget::item:selected:hover { background: #293b32; }
 """
+REPLAYER_STYLE = modernize_stylesheet(REPLAYER_STYLE)
