@@ -146,7 +146,7 @@ def test_update_paths_monitors_multiple_sites_and_content_types(tmp_path):
     }
     assert gui.importer.addImportDirectory.call_count == 4
     for site_key, path in expected.items():
-        gui.importer.addImportDirectory.assert_any_call(path, monitor=True, site=site_key)
+        gui.importer.addImportDirectory.assert_any_call(path, monitor=True, site=site_key, defer_scan=True)
     assert [entry.args[0] for entry in config.get_default_paths.call_args_list] == sites
 
 
@@ -204,6 +204,7 @@ def test_update_paths_resolves_enabled_sites_but_never_disabled_sites(tmp_path):
         str(detected_hands),
         monitor=True,
         site=("Winamax", "hh"),
+        defer_scan=True,
     )
     assert [entry.args[0] for entry in config.get_default_paths.call_args_list] == ["Winamax", "NoPaths"]
 
@@ -230,6 +231,7 @@ def test_active_config_refresh_replaces_only_the_changed_watch(tmp_path):
         str(new_hands),
         monitor=True,
         site=("Winamax", "hh"),
+        defer_scan=True,
     )
 
 
@@ -415,7 +417,8 @@ def test_launch_hud_uses_module_relative_path(monkeypatch, tmp_path):
         gui._launch_hud()
 
     command = mock_popen.call_args.args[0]
-    hud_path = command[0]
+    assert command[0] == sys.executable
+    hud_path = command[1]
     assert hud_path.endswith(os.path.join("fpdb_3_legacy", "HUD_main.pyw"))
     assert os.path.isfile(hud_path)  # resolved to a real file regardless of CWD/sys.path
 

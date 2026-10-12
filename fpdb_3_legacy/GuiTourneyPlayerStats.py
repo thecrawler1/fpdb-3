@@ -125,6 +125,9 @@ class GuiTourneyPlayerStats(QSplitter):
         self.addWidget(self.stats_frame)
         self.setStretchFactor(0, 0)
         self.setStretchFactor(1, 1)
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, self.refreshStats)
 
     def addGrid(
         self,

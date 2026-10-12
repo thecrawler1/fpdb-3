@@ -260,6 +260,7 @@ class Importer:
         self.faobs = None  # File as one big string
         self.mode = None
         self.pos_in_file: dict[str, int] = {}  # dict to remember how far we have read in the file
+        self.cooperative_callback: Callable[[], None] | None = None
 
         # Configuration of default parameters
         self.callHud = self.config.get_import_parameters().get("callFpdbHud")
@@ -766,6 +767,7 @@ class Importer:
         monitor=False,
         site=("default", "hh"),
         filter="passthrough",
+        defer_scan=False,
     ) -> None:
         """Add all files from a directory to the import list, optionally enabling monitoring.
 
@@ -776,6 +778,7 @@ class Importer:
             monitor: Whether to enable monitoring for new files in the directory.
             site: The site identifier tuple.
             filter: The filter name to use for imported files.
+            defer_scan: Register monitoring now, leaving discovery to runUpdated.
         """
         # gets called by GuiAutoImport.
         # This should really be using os.walk
@@ -784,10 +787,15 @@ class Importer:
             if monitor is True:
                 self.monitor = True
                 self.dirlist[site] = [dir, filter]
+            if defer_scan:
+                return
 
             # print "addImportDirectory: checking files in", dir
+            index = 0
             for subdir in os.walk(dir):
                 for file in subdir[2]:
+                    self._cooperate(index)
+                    index += 1
                     filename = os.path.join(subdir[0], file)
                     # ignore symbolic links (Linux & Mac)
                     if os.path.islink(filename):
@@ -1140,8 +1148,14 @@ class Importer:
             self._run_updated_cycle()
         _profile_reporter.maybe_log()
 
-    def _run_updated_cycle(self) -> None:
-        """One pass over the tracked directories and files."""
+    def _cooperate(self, index):
+        """Yield between complete items only when explicitly enabled by a worker."""
+        callback = getattr(self, "cooperative_callback", None)
+        if index and index % 8 == 0 and callback is not None:
+            callback()
+
+    def _scan_watch_dirs(self):
+        """Discover watched files in the import cycle, not during GUI setup."""
         for site, type in self.dirlist:
             self.addImportDirectory(
                 self.dirlist[(site, type)][0],
@@ -1150,7 +1164,18 @@ class Importer:
                 self.dirlist[(site, type)][1],
             )
 
-        for f in list(self.filelist):
+    def _run_updated_cycle(self) -> None:
+        """One pass over the tracked directories and files."""
+        self._scan_watch_dirs()
+        # A newly discovered file has not been imported, regardless of its age.
+        # Previously the first cycle either deferred it or treated older files
+        # as already consumed, silently missing hands until another append.
+        for filename in self.filelist:
+            self.updatedsize.setdefault(filename, 0)
+            self.updatedtime.setdefault(filename, 0)
+
+        for index, f in enumerate(list(self.filelist)):
+            self._cooperate(index)
             tracked_file = self.filelist.get(f)
             if tracked_file is None:
                 continue
@@ -1302,6 +1327,7 @@ class Importer:
                 # hand parsing open a database by itself.
                 setattr(hhc, "db", self.database)
             hhc.setAutoPop(self.mode == "auto")
+            hhc.cooperative_callback = getattr(self, "cooperative_callback", None)
             hhc.start()
 
             # Add parsing issues to the main importer's list
@@ -1368,13 +1394,15 @@ class Importer:
                     self.pos_in_file[fpdbfile.path] = hhc.getLastCharacterRead()
                     self.database.resetBulkCache()
 
-                    for hand in handlist:
+                    for index, hand in enumerate(handlist):
+                        self._cooperate(index)
                         hand.prepInsert(self.database, printtest=self.settings["testData"])
                         ahands.append(hand)
 
-                    for hand in ahands:
+                    for index, hand in enumerate(ahands):
+                        self._cooperate(index)
                         hand.assembleHand()
-                        log.debug(f"final import of hand: {hand}")
+                        log.debug("final import of hand: %s", hand)
                         phands.append(hand)
 
                     # Everything below runs inside the surrounding
@@ -1382,6 +1410,7 @@ class Importer:
                     backtrack = False
                     id = self.database.nextHandId()
                     for i in range(len(phands)):
+                        self._cooperate(i)
                         doinsert = len(phands) == i + 1
                         hand = phands[i]
                         try:
@@ -1494,6 +1523,7 @@ class Importer:
                             hand.handsplayers, hand.hero = hp, hero
 
                     for i in range(len(ihands)):
+                        self._cooperate(i)
                         doinsert = len(ihands) == i + 1
                         hand = ihands[i]
                         hand.insertHandsPlayers(

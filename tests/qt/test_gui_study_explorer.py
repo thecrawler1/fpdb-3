@@ -155,6 +155,16 @@ def test_catalog_has_inline_metadata_instead_of_description_tooltips(explorer):
     assert explorer.open_button.property("primaryAction") is True
 
 
+def test_study_spot_choices_are_large_enough_to_read_and_click(explorer, qtbot):
+    explorer.resize(1360, 960)
+    explorer.show()
+    qtbot.wait(20)
+    choices = explorer.category_box.findChildren(type(explorer.open_button))
+    assert choices
+    assert all(button.height() >= 70 for button in choices)
+    assert all(button.font().pixelSize() >= 16 for button in choices)
+
+
 def test_categories_can_be_cleared_and_remain_reachable_when_stacked(explorer, qtbot):
     explorer.resize(1280, 900)
     explorer.show()

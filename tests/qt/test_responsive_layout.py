@@ -692,17 +692,17 @@ def test_research_browser_scrolls_its_panes_and_stacks_them_when_narrow(qtbot, e
     browser.show()
 
     assert isinstance(browser.filters_pane, QScrollArea), "the filter list must scroll, not overflow"
-    assert browser.splitter.count() == 3
+    assert browser.pane_switcher.tabs.count() == 3
     # The filter rows keep their own height: the leftover room goes to the
     # stretch below them, not into the rows.
     assert browser.filter_rows_widget.sizePolicy().verticalPolicy() != QSizePolicy.Policy.Maximum
 
     browser.resize(1400, 800)
     process(app)
-    assert browser.splitter.is_stacked() is False
+    assert browser.pane_switcher.bar.isVisibleTo(browser)
 
     shrink_to(browser, 900, app)
-    assert browser.splitter.is_stacked() is True
+    assert browser.pane_switcher.bar.isVisibleTo(browser)
 
     browser.shutdown_workers()
 
@@ -723,11 +723,12 @@ def test_the_research_browser_shows_one_pane_at_a_time_when_stacked(qtbot, examp
     browser.resize(1400, 800)
     process(app)
 
-    assert not browser.narrow_view_bar.isVisibleTo(browser), "side by side, the splitter is the better tool"
-    assert [pane.isVisibleTo(browser) for pane in browser._panes()] == [True, True, True]
+    assert browser.narrow_view_bar.isVisibleTo(browser), "subtabs remain visible on wide screens"
+    browser.pane_switcher.set_active(0)
+    assert [pane.isVisibleTo(browser) for pane in browser._panes()] == [True, False, False]
 
     shrink_to(browser, 900, app)
-    assert browser.splitter.is_stacked() is True
+    assert browser.pane_switcher.is_switching()
     assert browser.narrow_view_bar.isVisibleTo(browser)
     assert [pane.isVisibleTo(browser) for pane in browser._panes()] == [True, False, False]
 
@@ -737,9 +738,9 @@ def test_the_research_browser_shows_one_pane_at_a_time_when_stacked(qtbot, examp
 
     browser.resize(1400, 800)
     process(app)
-    assert not browser.narrow_view_bar.isVisibleTo(browser)
-    assert [pane.isVisibleTo(browser) for pane in browser._panes()] == [True, True, True]
-    assert all(size > 0 for size in browser.splitter.sizes()), "no pane is left collapsed on the way back"
+    assert browser.narrow_view_bar.isVisibleTo(browser)
+    assert [pane.isVisibleTo(browser) for pane in browser._panes()] == [False, True, False]
+    assert browser.results_pane.width() > browser.width() * .8
 
     browser.shutdown_workers()
 
@@ -765,16 +766,16 @@ def test_the_research_browser_sizes_its_panes_from_their_content(qtbot, example_
 
     browser.resize(STACK_BELOW_WIDTH + 200, 800)
     process(app)
-    assert browser.splitter.is_stacked() is False
-    for size, measured in zip(browser.splitter.sizes(), PANE_WIDTHS):
-        assert size >= measured, f"a pane was given {size} px where its content measured {measured}"
+    browser.pane_switcher.set_active(0)
+    process(app)
+    assert browser.filters_pane.width() > browser.width() * .8
     assert browser.filters_pane.horizontalScrollBar().maximum() == 0, (
         "a screen that can hold the three panes shows the filter rows whole"
     )
 
     browser.resize(STACK_BELOW_WIDTH - 100, 700)
     process(app)
-    assert browser.splitter.is_stacked() is True
+    assert browser.pane_switcher.is_switching()
     assert browser.narrow_view_bar.isVisibleTo(browser)
 
     browser.shutdown_workers()
@@ -789,7 +790,7 @@ def test_the_research_browser_keeps_the_wide_widths_across_a_stacking_round_trip
     measured widths exist to solve.
     """
     app = get_qapp()
-    from fpdb_3_legacy.GuiResearchBrowser import PANE_WIDTHS, GuiResearchBrowser
+    from fpdb_3_legacy.GuiResearchBrowser import GuiResearchBrowser
 
     browser = GuiResearchBrowser(example_config, None, None)
     qtbot.addWidget(browser)
@@ -797,18 +798,16 @@ def test_the_research_browser_keeps_the_wide_widths_across_a_stacking_round_trip
     browser.resize(1500, 800)
     process(app)
 
-    wide = browser.splitter.sizes()
-    assert browser.splitter.is_stacked() is False
+    browser.pane_switcher.set_active(0)
+    process(app)
+    wide = browser.filters_pane.width()
 
     shrink_to(browser, 700, app)
-    assert browser.splitter.is_stacked() is True
+    assert browser.pane_switcher.is_switching()
 
     browser.resize(1500, 800)
     process(app)
-    assert browser.splitter.is_stacked() is False
-    for after, before, measured in zip(browser.splitter.sizes(), wide, PANE_WIDTHS):
-        assert abs(after - before) <= 2, f"the wide arrangement came back as {after} px instead of {before}"
-        assert after >= measured - 2
+    assert abs(browser.filters_pane.width() - wide) <= 2
 
     browser.shutdown_workers()
 
@@ -833,7 +832,9 @@ def test_the_filter_pane_scrolls_sideways_rather_than_clipping(qtbot, example_co
     shrink_to(browser, 520, app)
 
     pane = browser.filters_pane
-    assert browser.splitter.is_stacked() is True
+    browser.pane_switcher.set_active(0)
+    process(app)
+    assert browser.pane_switcher.is_switching()
     assert pane.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     assert pane.horizontalScrollBar().maximum() > 0, "the controls past the pane edge must be reachable"
 
@@ -868,9 +869,8 @@ def test_study_dashboard_keeps_the_panels_and_the_hands_resizable(qtbot, example
     dashboard = GuiStudyDashboard(example_config, None, None, selection=selection)
     qtbot.addWidget(dashboard)
 
-    assert dashboard.splitter.count() == 2
-    assert dashboard.splitter.widget(1) is dashboard.source_hands
-    assert dashboard.splitter.childrenCollapsible() is False, "a collapsed pane would hide the hands entirely"
+    assert dashboard.pane_switcher.tabs.count() == 3
+    assert dashboard.pane_switcher.tabs.widget(2) is dashboard.source_hands
     # The variables stay one click away and the header states how many are set.
     assert dashboard.variables_section.summary()
     dashboard.variables_section.set_expanded(False)
@@ -909,7 +909,7 @@ def test_the_study_dashboard_shows_one_zone_at_a_time_when_the_height_runs_out(q
     dashboard.show()
 
     switcher = dashboard.pane_switcher
-    zones = (dashboard.header_area, dashboard.splitter.widget(0), dashboard.splitter.widget(1))
+    zones = tuple(dashboard.pane_switcher.tabs.widget(index) for index in range(3))
     assert [switcher.bar.tabText(index) for index in range(switcher.bar.count())] == [
         "Filters",
         "Panels",
@@ -928,7 +928,7 @@ def test_the_study_dashboard_shows_one_zone_at_a_time_when_the_height_runs_out(q
     assert [zone.isVisibleTo(dashboard) for zone in zones] == [True, False, False]
     assert zones[0].height() > 500, "the context block is a zone like the others"
     assert dashboard.splitter.isVisibleTo(dashboard) is False, "the splitter steps aside for a zone outside it"
-    assert switcher.bar.y() < zones[0].y(), "and the bar stays above the zone it switches"
+    assert switcher.bar.mapToGlobal(switcher.bar.rect().topLeft()).y() < zones[0].mapToGlobal(zones[0].rect().topLeft()).y()
 
     switcher.set_active(2)
     process(app)
@@ -938,11 +938,9 @@ def test_the_study_dashboard_shows_one_zone_at_a_time_when_the_height_runs_out(q
     # Tall enough for all three: the bar steps aside and the splitter comes back.
     dashboard.resize(1400, 1200)
     process(app)
-    assert switcher.bar.isVisibleTo(dashboard) is False
-    assert [zone.isVisibleTo(dashboard) for zone in zones] == [True, True, True]
-    assert dashboard.splitter.isVisibleTo(dashboard) is True
-    assert zones[1].height() > 200, "and the splitter has the room to show both again"
-    assert zones[2].height() > 200
+    assert switcher.bar.isVisibleTo(dashboard) is True
+    assert [zone.isVisibleTo(dashboard) for zone in zones] == [False, False, True]
+    assert zones[2].height() > 1000
 
     dashboard.shutdown_workers()
 
@@ -968,10 +966,10 @@ def test_the_study_dashboard_context_does_not_crowd_out_the_zones(qtbot, example
     dashboard.resize(1400, 1200)
     process(app)
     assert dashboard.header_area.sizeHint().height() > 300, "the block asks for more than it may take"
-    cap = max(CONTEXT_BLOCK_FLOOR, dashboard.height() // CONTEXT_BLOCK_SHARE)
-    assert dashboard.pane_switcher.bar.isVisibleTo(dashboard) is False, "this is the shape the cap is for"
-    assert dashboard.header_area.height() == cap
-    assert dashboard.splitter.height() > 700, "the zones that grow get the window instead"
+    assert dashboard.pane_switcher.bar.isVisibleTo(dashboard)
+    assert dashboard.header_area.maximumHeight() == UNBOUNDED_HEIGHT
+    panels = dashboard.pane_switcher.tabs.widget(1)
+    assert panels.height() > 1000
 
     dashboard.resize(1080, 691)
     process(app)

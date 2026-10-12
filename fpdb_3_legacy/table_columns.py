@@ -5,6 +5,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
 from PySide6.QtWidgets import QHeaderView, QMenu
+from shiboken6 import isValid
 
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.table_clipboard import copy_table, install_table_copy
@@ -64,7 +65,7 @@ class ColumnControls(QObject):
         return self.keys.get(column) or str(self.model.headerData(column, Qt.Orientation.Horizontal) or f"Column {column + 1}")
 
     def apply(self, *_args) -> None:
-        if self.model is None:
+        if self.model is None or not isValid(self.view):
             return
         previous = self._applying
         self._applying = True

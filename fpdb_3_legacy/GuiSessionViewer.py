@@ -160,6 +160,9 @@ class GuiSessionViewer(QSplitter):
         self.setStretchFactor(1, 1)
         self.main_vbox.addWidget(self.graphBox)
         self.main_vbox.addWidget(self.stats_frame)
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, lambda: self.refreshStats(None))
 
     def close_owned_database(self) -> None:
         """Release the connection created for this tab."""

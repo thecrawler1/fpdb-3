@@ -67,7 +67,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -1300,9 +1299,11 @@ class fpdb(QMainWindow):
             success, message, restart_changes = config_manager.reload_config()
 
             if success and not restart_changes:
+                self._discard_results_page()
                 # Dynamic reload successful without changes requiring restart
                 # IMPORTANT: Update self.config to point to the config of ConfigurationManager
                 self.config = config_manager.get_config()
+                self._schedule_results_preload()
 
                 # Also update references in existing tabs
                 for thread in self.threads:
@@ -1541,6 +1542,7 @@ class fpdb(QMainWindow):
         - self.db.
         """
         # Load the configuration
+        self._discard_results_page()
         self.config = Configuration.Config(file=options.config, dbname=options.dbname)
         if self.config.file_error:
             self.warning_box(
@@ -1715,6 +1717,7 @@ class fpdb(QMainWindow):
         # Validate the configuration if the database version is up-to-date
         if hasattr(self.db, "wrongDbVersion") and not self.db.wrongDbVersion:
             self.validate_config()
+        self._schedule_results_preload()
 
     def _ensure_database_or_prompt(self) -> None:
         """If the startup database connection failed, let the user fix it or quit.
@@ -1760,6 +1763,15 @@ class fpdb(QMainWindow):
 
         log.info("Performing application cleanup...")
         self.quitting = True
+        self._results_page = None
+
+        from fpdb_3_legacy.background_tasks import drain_background_tasks
+        from fpdb_3_legacy.deferred_page import DeferredPage
+
+        for page in self.threads:
+            if isinstance(page, DeferredPage):
+                page.close_owned_database()
+        drain_background_tasks()
 
         if self.db is not None:
             if self.db.backend == self.db.MYSQL_INNODB:
@@ -1863,15 +1875,81 @@ class fpdb(QMainWindow):
                         "Failed to refresh filters for %s",
                         thread.__class__.__name__,
                     )
+        self.refresh_live_views()
+
+    def refresh_live_views(self) -> None:
+        """Invalidate analyses after new hands; refresh only the visible page."""
+        for page in self.threads:
+            invalidate_results = getattr(page, "invalidate_results", None)
+            if callable(invalidate_results):
+                invalidate_results()
+                continue
+            loader = getattr(page, "_fpdb_auto_loader", None)
+            if loader is not None:
+                loader.invalidate()
+
+    def _ensure_auto_import(self):
+        from shiboken6 import isValid
+
+        page = getattr(self, "_automatic_import_page", None)
+        if page is None or not isValid(page):
+            page = GuiAutoImport.GuiAutoImport(self.settings, self.config, self.sql, self)
+            page.data_changed.connect(self.refresh_live_views)
+            page.startButton.clicked.connect(self._auto_import_user_choice)
+            self._automatic_import_page = page
+            self.threads.append(page)
+            page.hide()
+        return page
+
+    def _auto_import_user_choice(self, *_args) -> None:
+        # A real button click consumes the pending automatic startup request;
+        # readiness must never turn import back on after the user pressed Stop.
+        self._background_auto_import_started = True
+
+    def _start_background_auto_import(self) -> None:
+        if self.quitting or self.config is None or getattr(self, "_background_auto_import_started", False):
+            return
+        if not getattr(self, "_results_startup_priority_released", False):
+            self._prioritize_startup_results()
+            return
+        self._background_auto_import_started = True
+        page = self._ensure_auto_import()
+        page.startButton.setChecked(True)
+
+    def _prioritize_startup_results(self) -> None:
+        """Complete interactive Results before CPU-heavy history replay starts."""
+        from PySide6.QtCore import QTimer
+
+        if getattr(self, "_results_startup_priority_waiting", False):
+            return
+        self._results_startup_priority_waiting = True
+        page = self._ensure_results_page()
+        if page._ready:
+            self._release_startup_results_priority()
+            return
+        page.ready.connect(self._release_startup_results_priority)
+        page.load_failed.connect(self._release_startup_results_priority)
+        # A unavailable database/page must not disable automatic import forever.
+        QTimer.singleShot(1500, self._release_startup_results_priority)
+
+    def _release_startup_results_priority(self) -> None:
+        from PySide6.QtCore import QTimer
+
+        if self.quitting or getattr(self, "_results_startup_priority_released", False):
+            return
+        self._results_startup_priority_released = True
+        # Give Qt its next paint before starting the parser worker.
+        QTimer.singleShot(50, self._start_background_auto_import)
 
     def tab_auto_import(self, widget, data=None) -> None:
         """Opens the auto import tab."""
         new_aimp_thread = self.open_tab(
             "HUD",
-            lambda: GuiAutoImport.GuiAutoImport(self.settings, self.config, self.sql, self),
+            self._ensure_auto_import,
+            allow_multiple=False,
         )
-        if options.autoimport:
-            new_aimp_thread.startClicked(new_aimp_thread.startButton, "autostart")
+        if options.autoimport and new_aimp_thread is not None:
+            new_aimp_thread.startButton.setChecked(True)
             options.autoimport = False
 
     def tab_bulk_import(self, widget, data=None) -> None:
@@ -2017,14 +2095,70 @@ class fpdb(QMainWindow):
 
         self.open_tab("Session Stats", build, module="fpdb_3_legacy.GuiSessionViewer")
 
-    def tab_results(self, widget, data=None) -> None:
+    def _ensure_results_page(self):
+        from shiboken6 import isValid
+
+        from fpdb_3_legacy.deferred_page import DeferredPage
+
+        page = getattr(self, "_results_page", None)
+        context = (self.config, self.sql, self.db)
+        if page is not None and isValid(page) and not page._closed:
+            if all(old is new for old, new in zip(self._results_page_context, context)):
+                return page
+        self._discard_results_page()
+        config, sql, db = context
+
         def build(module):
-            page = module.GuiResultsViewer(self.config, self.sql)
+            page = module.GuiResultsViewer(config, sql, db=db)
             page.hands_requested.connect(self._open_result_hands)
             page.import_requested.connect(lambda: self.tab_bulk_import(None))
             return page
 
-        self.open_tab("Results", build, module="fpdb_3_legacy.GuiResultsViewer", allow_multiple=False)
+        page = DeferredPage("fpdb_3_legacy.GuiResultsViewer", build, parent=self, preload=True)
+        page.hide()
+        self._results_page = page
+        self._results_page_context = context
+        self.threads.append(page)
+        return page
+
+    def _discard_results_page(self) -> None:
+        from shiboken6 import isValid
+
+        page = getattr(self, "_results_page", None)
+        self._results_page = None
+        if page is None:
+            return
+        if isValid(page):
+            index = self.nb.indexOf(page)
+            if index >= 0:
+                self.close_tab(index)
+                return
+            page.close_owned_database()
+            page.deleteLater()
+        with contextlib.suppress(ValueError):
+            self.threads.remove(page)
+
+    def _schedule_results_preload(self) -> None:
+        from PySide6.QtCore import QTimer
+
+        if (getattr(self, "_results_preload_ready", False)
+                and getattr(self, "_results_first_paint", False)):
+            QTimer.singleShot(0, self._preload_results)
+
+    def _preload_results(self) -> None:
+        if not self.quitting and self.config is not None and self.db is not None:
+            self._ensure_results_page()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if not getattr(self, "_results_first_paint", False):
+            self._results_first_paint = True
+            self._schedule_results_preload()
+
+    def tab_results(self, widget, data=None) -> None:
+        # Validate the cache before open_tab's single-instance shortcut as well.
+        page = self._ensure_results_page()
+        self.open_tab("Results", lambda: page, allow_multiple=False)
 
     def _open_result_hands(self, hand_ids) -> None:
         viewer = next((page for page in self.threads if isinstance(page, GuiHandViewer.GuiHandViewer)), None)
@@ -2204,6 +2338,8 @@ class fpdb(QMainWindow):
 
     def close_tab(self, index) -> None:
         item = self.nb.widget(index)
+        if item is getattr(self, "_results_page", None):
+            self._results_page = None
         self.nb.removeTab(index)
         self.nb_tab_names.pop(index)
 
@@ -2241,6 +2377,9 @@ class fpdb(QMainWindow):
         self.quitting = False
         self.visible = False
         self.threads: list[Any] = []
+        self._results_page = None
+        self._results_preload_ready = False
+        self._results_first_paint = False
         self.closeq: queue.Queue[Any] = queue.Queue(20)
 
         # Connect cleanup handler to application aboutToQuit signal
@@ -2365,6 +2504,13 @@ class fpdb(QMainWindow):
 
         if options.autoimport:
             self.tab_auto_import(None)
+        else:
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, self._start_background_auto_import)
+
+        self._results_preload_ready = True
+        self._schedule_results_preload()
 
     def _register_gui_observer(self) -> None:
         """Registers the GUI observer with the ConfigurationManager."""
@@ -2398,32 +2544,9 @@ class CustomTitleBar(QWidget):
         self.title.setObjectName("customTitleBarLabel")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.btn_minimize = QPushButton("-")
-        self.btn_maximize = QPushButton("+")
-        self.btn_close = QPushButton("x")
-        self.btn_minimize.setObjectName("titleBarButton")
-        self.btn_maximize.setObjectName("titleBarButton")
-        self.btn_close.setObjectName("titleBarButton")
-
-        button_size = 20
-        self.btn_minimize.setFixedSize(button_size, button_size)
-        self.btn_maximize.setFixedSize(button_size, button_size)
-        self.btn_close.setFixedSize(button_size, button_size)
-
-        self.btn_minimize.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.btn_maximize.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.btn_close.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-        self.btn_minimize.clicked.connect(parent.showMinimized)
-        self.btn_maximize.clicked.connect(self.toggle_maximize_restore)
-        self.btn_close.clicked.connect(parent.close)
-
         layout = QHBoxLayout()
         layout.addWidget(self.title)
         layout.addStretch()
-        layout.addWidget(self.btn_minimize)
-        layout.addWidget(self.btn_maximize)
-        layout.addWidget(self.btn_close)
         self.setLayout(layout)
 
         self.is_maximized = False

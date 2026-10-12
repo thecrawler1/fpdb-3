@@ -9,6 +9,7 @@ if os.getenv("FPDB_FORCE_X11") == "1":
 
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 import threading
@@ -92,6 +93,14 @@ def to_raw(string) -> str:
     return rf"{string}"
 
 
+def _yield_auto_import():
+    from fpdb_3_legacy.ui_work_priority import interactive_load_pending
+
+    # Leave a larger slice for a page currently loading, without pausing inside
+    # a transaction indefinitely or changing the hand insertion order.
+    time.sleep(.005 if interactive_load_pending() else .001)
+
+
 class AutoImportThread(QThread):
     """Worker thread to run auto-import cycle off the main GUI thread."""
 
@@ -103,6 +112,7 @@ class AutoImportThread(QThread):
         super().__init__()
         self.importer = importer
         self.db_write_lock = db_write_lock
+        self.new_hands = 0
 
     def run(self) -> None:
         # Held for the whole cycle: the importer's database is one connection
@@ -111,19 +121,27 @@ class AutoImportThread(QThread):
         lock = self.db_write_lock
         if lock is not None:
             lock.acquire()
+        previous_callback = getattr(self.importer, "cooperative_callback", None)
         try:
+            # Sleep-only cooperation releases the GIL without introducing
+            # cancellation inside a file transaction or changing bulk imports.
+            self.importer.cooperative_callback = _yield_auto_import
             # Checked here rather than left to fail mid-cycle so the GUI can say
             # the database is away, instead of reporting a raw driver error once
             # every interval for as long as the outage lasts.
             if not self.importer.database.ensure_connection():
                 self.db_offline.emit()
                 return
+            count = getattr(self.importer.database, "getHandCount", None)
+            before = int(count()) if callable(count) else 0
             self.importer.autoSummaryGrab()
             self.importer.runUpdated()
+            self.new_hands = max(0, int(count()) - before) if callable(count) else 0
             self.finished.emit()
         except Exception as e:  # intentional broad catch: Qt worker thread surfaces any failure via the error signal
             self.error.emit(str(e))
         finally:
+            self.importer.cooperative_callback = previous_callback
             if lock is not None:
                 lock.release()
 
@@ -517,6 +535,7 @@ class SwCNativeTailingThread(QThread):
 
 class GuiAutoImport(QWidget):
     log_message = Signal(str, str)
+    data_changed = Signal()
 
     def __init__(self, settings, config, sql=None, parent=None, cli=False) -> None:
         if not cli:
@@ -608,8 +627,9 @@ class GuiAutoImport(QWidget):
         mainLayout.addWidget(settingsGroup)
 
         self.intervalEntry = QSpinBox()
+        self.intervalEntry.setRange(5, 3600)
         self.intervalEntry.setValue(
-            int(self.config.get_import_parameters().get("interval")),
+            max(120, int(self.config.get_import_parameters().get("interval") or 120)),
         )
         settingsLayout.addRow(QLabel(_("Time between imports (seconds):")), self.intervalEntry)
 
@@ -823,6 +843,9 @@ class GuiAutoImport(QWidget):
         status = _("Stopping Auto Import...") if self._stop_cleanup_pending else _("Ready")
         self.statusLabel.setText(status)
         log.debug("AutoImport: background import cycle finished successfully")
+        if getattr(self.import_thread, "new_hands", 0) > 0:
+            self.data_changed.emit()
+            self.import_thread.new_hands = 0
 
     def import_db_offline(self) -> None:
         """Called when a cycle was skipped because the database is unreachable."""
@@ -1304,7 +1327,7 @@ class GuiAutoImport(QWidget):
             command = os.path.join(base_path, "HUD_main.pyw")
             if not os.path.isfile(command):
                 self.addText(f"\n*** {command} was not found", "error")
-            command = [command, *self.settings["cl_options"].split()]
+            command = hud_main_command(*shlex.split(self.settings["cl_options"]))
             bs = 1
 
         # ------------------------------------------------------------------
@@ -1392,6 +1415,9 @@ class GuiAutoImport(QWidget):
         log.error(msg)
         self.addText(f"\n*** {msg}", "error")
         self.pipe_to_hud = None
+        self.importer.setCallHud(False)
+        if not self.cli:
+            self.statusLabel.setText(_("Import running; HUD unavailable"))
 
     def startClicked(self) -> None:
         """Runs when user clicks start on auto import tab."""
@@ -1417,19 +1443,16 @@ class GuiAutoImport(QWidget):
                         error_msg = f"GuiAutoImport Error opening pipe: {traceback.format_exc()}"
                         log.warning(error_msg)
                         self.addText(f"\n*** {error_msg}", "error")
+                        self.importer.setCallHud(False)
                     else:
                         QTimer.singleShot(1500, self._check_hud_process_started)
-                        # ------------------------------------------------------------------
-                        # path config, timer, etc.
-                        # ------------------------------------------------------------------
-                        self.updatePaths()
-
-                        self.do_import()
-                        self.start_swc_native_capture()
-                        interval = self.intervalEntry.value()
-                        self.importtimer = QTimer()
-                        self.importtimer.timeout.connect(self.do_import)
-                        self.importtimer.start(interval * 1000)
+                    self.updatePaths()
+                    self.do_import()
+                    self.start_swc_native_capture()
+                    interval = self.intervalEntry.value()
+                    self.importtimer = QTimer(self)
+                    self.importtimer.timeout.connect(self.do_import)
+                    self.importtimer.start(interval * 1000)
 
             else:
                 self.addText("\nAuto Import aborted. Global lock not available.", "error")
@@ -1654,7 +1677,7 @@ class GuiAutoImport(QWidget):
             current_path = self.importer.dirlist.get(key, [None])[0]
             if current_path == path:
                 continue
-            self.importer.addImportDirectory(path, monitor=True, site=key)
+            self.importer.addImportDirectory(path, monitor=True, site=key, defer_scan=True)
             label = "hand history" if key[1] == "hh" else "tournament summary"
             self.addText(f"\n * Add {key[0]} {label} directory: {path}", "folder")
 

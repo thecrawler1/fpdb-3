@@ -26,6 +26,7 @@ import sys
 import time
 import xml.parsers.expat
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 
@@ -132,6 +133,7 @@ in_path   (default '-' = sys.stdin)
         out_path  (default '-' = sys.stdout).
         """
         self.config = config
+        self.cooperative_callback: Callable[[], None] | None = None
         self.import_parameters = self.config.get_import_parameters()
         if sitename is None:
             self.sitename = getattr(self, "sitename", "PokerStars")
@@ -201,6 +203,11 @@ HandHistoryConverter: '{sitename}'
     out_path    '{out_path}'
     """.format(**locals())
 
+    def _cooperate(self, index: int) -> None:
+        """Yield through the worker's sleep-only callback between batches of hands."""
+        if index and index % 8 == 0 and self.cooperative_callback is not None:
+            self.cooperative_callback()
+
     def start(self) -> None:
         """Process a hand at a time from the input specified by in_path."""
         starttime = time.time()
@@ -214,14 +221,15 @@ HandHistoryConverter: '{sitename}'
         self.numErrors = 0
         lastParsed = None
         handsList = self.allHandsAsList()
-        log.debug(f"Hands list is: {handsList}")
+        log.debug("Hands list is: %s", handsList)
         log.info(f"Parsing {len(handsList)} hands")
         # Determine if we're dealing with a HH file or a Summary file
         # quick fix : empty files make the handsList[0] fail ==> If empty file, go on with HH parsing
         if not handsList or self.isSummary(handsList[0]) is False:
             self.parsedObjectType = "HH"
             last_error_info = None
-            for handText in handsList:
+            for index, handText in enumerate(handsList):
+                self._cooperate(index)
                 try:
                     self.processedHands.append(self.processHand(handText))
                     lastParsed = "stored"

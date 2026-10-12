@@ -149,6 +149,37 @@ def test_worker_imports_normally_when_the_database_answers() -> None:
     importer.runUpdated.assert_called_once()
 
 
+def test_import_cycle_detects_new_hands_for_view_invalidation():
+    from fpdb_3_legacy.GuiAutoImport import AutoImportThread
+
+    importer = MagicMock()
+    importer.database.ensure_connection.return_value = True
+    importer.database.getHandCount.side_effect = [10, 14]
+    worker = AutoImportThread(importer)
+    worker.run()
+    assert worker.new_hands == 4
+
+
+def test_hud_launch_failure_does_not_prevent_periodic_file_import():
+    from fpdb_3_legacy import GuiAutoImport
+
+    gui = _make_gui()
+    gui.startButton = MagicMock()
+    gui.startButton.isChecked.return_value = True
+    gui.intervalEntry = MagicMock()
+    gui.intervalEntry.value.return_value = 120
+    gui._launch_hud = MagicMock(side_effect=OSError("HUD launch failed"))
+    gui.updatePaths = MagicMock()
+    gui.do_import = MagicMock()
+    gui.start_swc_native_capture = MagicMock()
+    with patch.object(GuiAutoImport, "QTimer", return_value=MagicMock()) as timer:
+        gui.startClicked()
+    gui.updatePaths.assert_called_once()
+    gui.do_import.assert_called_once()
+    timer.return_value.start.assert_called_once_with(120000)
+    gui.importer.setCallHud.assert_called_with(False)
+
+
 def test_stop_waits_with_a_timeout_not_forever() -> None:
     """An unbounded wait on the UI thread is what froze the window."""
     from fpdb_3_legacy.GuiAutoImport import STOP_WAIT_MS

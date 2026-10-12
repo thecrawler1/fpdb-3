@@ -37,12 +37,14 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTabBar,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 __all__ = [
+    "WorkspaceTabs",
     "CONTEXT_BLOCK_FLOOR",
     "CONTEXT_BLOCK_SHARE",
     "SCREEN_MARGIN",
@@ -58,6 +60,36 @@ __all__ = [
     "labelled_field",
     "wrap_in_scroll",
 ]
+
+
+class WorkspaceTabs(QWidget):
+    """Full-size workspace subtabs instead of splitting a view into thirds."""
+
+    def __init__(self, host, splitter, panes, labels, *, sizes=None):
+        super().__init__(host)
+        self.tabs = QTabWidget(self)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.tabs)
+        for pane, label in zip(panes, labels):
+            self.tabs.addTab(pane, label)
+        self.bar = self.tabs.tabBar()
+        splitter.hide()
+
+    def set_active(self, index):
+        self.tabs.setCurrentIndex(index)
+
+    def active(self):
+        return self.tabs.currentIndex()
+
+    def is_switching(self):
+        return True
+
+    def set_switching(self, switching):
+        # Subtabs are always visible, irrespective of screen dimensions.
+        pass
 
 #: Room kept around a window for the menu bar, the Dock and window decorations.
 SCREEN_MARGIN = 48

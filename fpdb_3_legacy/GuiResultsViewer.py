@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+from copy import copy
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from time import perf_counter, thread_time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
-from PySide6.QtCore import QDate, QIODevice, QSaveFile, QSortFilterProxyModel, Qt, QTimer, QTimeZone, Signal
+from PySide6.QtCore import QDate, QIODevice, QSaveFile, QSortFilterProxyModel, Qt, QThread, QTimer, QTimeZone, Signal
 from PySide6.QtGui import QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from fpdb_3_legacy import Database
+from fpdb_3_legacy.background_tasks import TaskWorker, retain_until_finished
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import format_currency, format_number
 from fpdb_3_legacy.period_results import (
@@ -57,9 +60,59 @@ from fpdb_3_legacy.ring_stats.base import DbWorker
 from fpdb_3_legacy.ring_stats.styles import get_modern_qss, get_theme_palette
 from fpdb_3_legacy.ring_stats.views.dashboard_view import ProfitGraphWidget
 from fpdb_3_legacy.table_columns import install_column_controls
+from fpdb_3_legacy.ui_work_priority import begin_interactive_load, end_interactive_load
 
 PERIOD_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 HEADINGS = ("Period", "Hands", "VPIP", "PFR", "Profit ($)", "bb/100", "EV ($)", "EV bb/100")
+INLINE_HAND_LIMIT = 1000
+
+
+def discover_heroes(config, db):
+    heroes = []
+    seen = set()
+    for site in config.get_supported_sites():
+        ids = [db.get_player_id(config, site, alias) for alias in config.get_hero_aliases(site)]
+        if not any(ids):
+            ids = db.get_hero_player_ids(site)
+        for player_id in ids:
+            if player_id is not None and player_id not in seen:
+                seen.add(player_id)
+                heroes.append((f"{db.get_player_name_by_id(player_id)} · {site}", int(player_id)))
+    db.rollback()
+    return heroes
+
+
+def prepare_results_database(config, querylist, db):
+    owned = db is None
+    if owned:
+        db = Database.Database(config, sql=querylist)
+    try:
+        # Hero discovery must not share the GUI's cursor or transaction.
+        with db.worker_connection() as connection:
+            cursor = connection.cursor()
+            reader = copy(db)
+            reader.connection = connection
+            reader.cursor = cursor
+            try:
+                heroes = discover_heroes(config, reader)
+            finally:
+                # The facade borrows these resources. Database.__del__ must not
+                # close a connection already returned to the worker pool (or the
+                # copied GUI cursor if creating the worker cursor had failed).
+                reader.cursor = None
+                reader.connection = None
+                cursor.close()
+        return db, heroes
+    except Exception:
+        if owned:
+            db.disconnect()
+        raise
+
+
+def aggregate_results(hands, game, stake, grouping, zone, *, cooperative=False):
+    filtered = tuple(h for h in hands if (game is None or h.game == game) and (stake is None or h.stake_key == stake))
+    return (filtered, group_results(filtered, grouping, zone, cooperative=cooperative),
+            summarize_results(filtered, cooperative=cooperative))
 
 
 class ResultNumberDelegate(QStyledItemDelegate):
@@ -91,18 +144,47 @@ def local_zone() -> tzinfo:
         return datetime.now().astimezone().tzinfo or timezone.utc
 
 
+def _construction_cpu_time():
+    """Keep unavailable diagnostic CPU clocks from affecting widget creation."""
+    try:
+        return thread_time()
+    except (OSError, RuntimeError, NotImplementedError):
+        return None
+
+
 class GuiResultsViewer(QWidget):
     hands_requested = Signal(list)
     import_requested = Signal()
+    results_ready = Signal()
+    results_failed = Signal()
 
     def __init__(self, config, querylist=None, *, db=None, zone: tzinfo | None = None, autoload=True):
+        construction_started = perf_counter()
+        cpu_started = _construction_cpu_time()
         super().__init__()
+        # Flat wall durations in seconds; optional <stage>_cpu_seconds entries
+        # measure only this GUI thread. These are separate from async loading.
+        self.construction_metrics = {}
         self.conf = config
-        self.db = db if db is not None else Database.Database(config, sql=querylist)
+        self.db = db
+        self._querylist = querylist
+        self._setup_complete = not autoload
+        self._setup_worker = None
+        self._setup_loading = False
+        if not autoload and self.db is None:
+            self.db = Database.Database(config, sql=querylist)
         self._owns_db = db is None
         self.zone = zone or local_zone()
         self._workers: list[DbWorker] = []
+        self._tasks: list[TaskWorker] = []
+        self._view_generation = 0
+        self._curve_generation = 0
+        self._curve_cache = {}
+        self._pending_curve = None
+        self._curve_requests = {}
         self._generation = 0
+        # Old hands remain visible during a query, but must not become actionable.
+        self._data_generation = None
         self._closed = False
         self._db_closed = False
         self._loading = False
@@ -110,6 +192,7 @@ class GuiResultsViewer(QWidget):
         self._request_status = ""
         self._has_load_error = False
         self._graph_context = None
+        self._initialize_load_metrics()
         self._custom_date_timer = QTimer(self)
         self._custom_date_timer.setSingleShot(True)
         self._custom_date_timer.setInterval(300)
@@ -119,16 +202,43 @@ class GuiResultsViewer(QWidget):
         self.periods: list[PeriodResult] = []
         self.total = summarize_results(())
         self.selection: date | str | None = None
-        self.setObjectName("resultsViewer")
-        self.setStyleSheet(get_modern_qss() + review_stylesheet())
-        self._build_controls()
-        self._build_table_and_graph()
-        self._populate_heroes()
-        self._set_preset()
-        self._connect_controls()
-        self._rebuild_table()
+        self._build_results_ui()
         if autoload:
-            QTimer.singleShot(0, self.refresh)
+            from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+            install_automatic_loading(self, self.refresh)
+        self._record_construction_stage("total", construction_started, cpu_started)
+
+    def _record_construction_stage(self, stage, started, cpu_started):
+        self.construction_metrics[stage] = perf_counter() - started
+        cpu_finished = _construction_cpu_time()
+        if cpu_started is not None and cpu_finished is not None:
+            self.construction_metrics[f"{stage}_cpu_seconds"] = max(0.0, cpu_finished - cpu_started)
+
+    @contextlib.contextmanager
+    def _construction_stage(self, stage):
+        started = perf_counter()
+        cpu_started = _construction_cpu_time()
+        try:
+            yield
+        finally:
+            self._record_construction_stage(stage, started, cpu_started)
+
+    def _build_results_ui(self):
+        with self._construction_stage("build_styles"):
+            self.setObjectName("resultsViewer")
+            self.setStyleSheet(get_modern_qss() + review_stylesheet())
+        with self._construction_stage("build_controls"):
+            self._build_controls()
+        with self._construction_stage("build_table_graph"):
+            self._build_table_and_graph()
+        with self._construction_stage("heroes"):
+            if self._setup_complete:
+                self._populate_heroes()
+        with self._construction_stage("initial_table"):
+            self._set_preset()
+            self._connect_controls()
+            self._rebuild_table()
 
     def _build_controls(self) -> None:
         layout = QVBoxLayout(self)
@@ -326,19 +436,15 @@ class GuiResultsViewer(QWidget):
         return view
 
     def _populate_heroes(self) -> None:
+        self._set_heroes(discover_heroes(self.conf, self.db))
+
+    def _set_heroes(self, heroes) -> None:
         seen = {self.hero_combo.itemData(i) for i in range(self.hero_combo.count())}
         self.hero_combo.blockSignals(True)
-        for site in self.conf.get_supported_sites():
-            aliases = self.conf.get_hero_aliases(site)
-            ids = [self.db.get_player_id(self.conf, site, alias) for alias in aliases]
-            if not any(ids):
-                ids = self.db.get_hero_player_ids(site)
-            for player_id in ids:
-                if player_id is not None and player_id not in seen:
-                    seen.add(player_id)
-                    name = self.db.get_player_name_by_id(player_id)
-                    self.hero_combo.addItem(f"{name} · {site}", int(player_id))
-        self.db.rollback()
+        for label, player_id in heroes:
+            if player_id not in seen:
+                seen.add(player_id)
+                self.hero_combo.addItem(label, player_id)
         if self.hero_combo.count() and self.hero_combo.currentIndex() < 0:
             self.hero_combo.setCurrentIndex(0)
         self.hero_combo.blockSignals(False)
@@ -358,6 +464,8 @@ class GuiResultsViewer(QWidget):
     def _custom_dates_changed(self) -> None:
         if self.interval_combo.currentData() != "custom":
             return
+        self._load_started = None
+        self._finish_interactive_load()
         self._generation += 1  # Reject a reply for dates that were just edited.
         self._custom_date_timer.stop()
         if self.from_date.date() > self.to_date.date():
@@ -395,21 +503,22 @@ class GuiResultsViewer(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        if self._closed:
+        if self._closed or self._setup_loading:
+            return
+        self._begin_load_timing()
+        if not self._setup_complete:
+            self._start_setup()
             return
         self._custom_date_timer.stop()
         self._generation += 1
         generation = self._generation
+        self._invalidate_graph_request(discard=True)
         self._results_current = False
         self._loading = False
         self._has_load_error = False
         player_id = self.hero_combo.currentData()
         if player_id is None:
-            self._populate_heroes()
-            player_id = self.hero_combo.currentData()
-        if player_id is None:
-            self._request_status = _("No configured Hero found. Import hands and check the site screen name.")
-            self._update_status()
+            self._start_setup()
             return
         start = end = None
         if self.interval_combo.currentData() != "all":
@@ -419,6 +528,9 @@ class GuiResultsViewer(QWidget):
         except ValueError as error:
             self._request_status = str(error)
             self._update_status()
+            self._load_started = None
+            self._finish_interactive_load()
+            self.results_failed.emit()
             return
         self._loading = True
         self._request_status = _("Loading results…")
@@ -427,6 +539,7 @@ class GuiResultsViewer(QWidget):
         self._update_status()
         self._workers = [worker for worker in self._workers if not worker.isFinished()]
         worker = DbWorker(self.db, "calendarResults", query, params)
+        self._query_started = perf_counter()
         self._workers.append(worker)
 
         def loaded(_name, rows, _columns):
@@ -435,36 +548,168 @@ class GuiResultsViewer(QWidget):
         def failed(message):
             self._fail_results(generation, _("Could not load results: ") + message)
 
-        worker.finished.connect(loaded)
-        worker.error.connect(failed)
+        connection = Qt.ConnectionType.QueuedConnection if isinstance(worker, QThread) else Qt.ConnectionType.AutoConnection
+        worker.finished.connect(loaded, connection)
+        worker.error.connect(failed, connection)
         worker.start()
+
+    def preload(self) -> None:
+        """Prepare the default snapshot before the Results tab is first opened."""
+        if self._closed or self._preloaded:
+            return
+        self._preloaded = True
+        loader = getattr(self, "_fpdb_auto_loader", None)
+        if loader is not None:
+            loader.dirty = False
+        self.refresh()
+
+    def _initialize_load_metrics(self):
+        self.load_metrics = {}
+        self._load_started = None
+        self._query_started = None
+        self._prepare_started = None
+        self._preloaded = False
+        self._interactive_token = None
+
+    def _begin_load_timing(self):
+        if self._load_started is None:
+            self._interactive_token = begin_interactive_load()
+            self._load_started = perf_counter()
+            self._query_started = self._prepare_started = None
+            self.load_metrics = {}
+
+    def _report_results_ready(self) -> None:
+        if not self._loading and self._pending_curve is None and self._has_load_error:
+            self._load_started = None
+            self._finish_interactive_load()
+        if self._loading or self._has_load_error or self._pending_curve is not None or self._load_started is None:
+            return
+        now = perf_counter()
+        self.load_metrics["total_seconds"] = now - self._load_started
+        if self._prepare_started is not None:
+            self.load_metrics["prepare_and_render_seconds"] = now - self._prepare_started
+        self._load_started = None
+        self._finish_interactive_load()
+        self.results_ready.emit()
+
+    def _finish_interactive_load(self):
+        if self._interactive_token is not None:
+            end_interactive_load(self._interactive_token)
+            self._interactive_token = None
+
+    def _start_task(self, task, completed, failed, *, category="table"):
+        self._tasks = [worker for worker in self._tasks if not worker.isFinished()]
+        if category in ("table", "rows"):
+            for previous in self._tasks:
+                if getattr(previous, "category", None) == category:
+                    cancel = getattr(previous, "cancel", None)
+                    if cancel is not None:
+                        cancel()
+        worker = TaskWorker(task)
+        worker.category = category
+        self._tasks.append(worker)
+        connection = Qt.ConnectionType.QueuedConnection if isinstance(worker, QThread) else Qt.ConnectionType.AutoConnection
+        worker.completed.connect(completed, connection)
+        worker.error.connect(failed, connection)
+        worker.start()
+        return worker
+
+    def _start_setup(self):
+        if self._setup_loading:
+            return
+        self._setup_loading = True
+        self._loading = True
+        self._request_status = _("Loading results…")
+        self._update_status()
+        config, querylist, db = self.conf, self._querylist, self.db
+        self._setup_started = perf_counter()
+        self._setup_worker = self._start_task(
+            lambda: prepare_results_database(config, querylist, db), self._finish_setup, self._setup_failed,
+            category="setup",
+        )
+
+    def _finish_setup(self, result):
+        self.db, heroes = result
+        self.load_metrics["setup_seconds"] = perf_counter() - self._setup_started
+        self._setup_loading = False
+        if self._closed:
+            return
+        self._setup_complete = True
+        self._set_heroes(heroes)
+        if self.hero_combo.currentData() is not None:
+            self.refresh()
+        else:
+            self._loading = False
+            self._results_current = False
+            self._has_load_error = False
+            self._request_status = _("No configured Hero found. Import hands and check the site screen name.")
+            self._update_status()
+            self._report_results_ready()
+
+    def _setup_failed(self, message):
+        self._setup_loading = False
+        self._fail_results(self._generation, _("Could not load results: ") + message)
 
     def _fail_results(self, generation, message) -> None:
         if self._closed or generation != self._generation:
             return
         self._loading = False
         self._has_load_error = True
+        self._load_started = None
+        self._finish_interactive_load()
         self._results_current = False
         self._request_status = message
         if self.raw_hands:
             self._request_status += " " + _("Displaying previous results.")
         self._update_status()
+        self.results_failed.emit()
 
     def _receive_rows(self, generation, rows) -> None:
         if self._closed or generation != self._generation:
             return
+        now = perf_counter()
+        if self._query_started is not None:
+            self.load_metrics["query_seconds"] = now - self._query_started
+        self._prepare_started = now
+        self._invalidate_graph_request(discard=True)
+        if len(rows) > INLINE_HAND_LIMIT:
+            state = (self.game_combo.currentData(), self.limit_combo.currentData(), self.group_combo.currentData())
+            zone = self.zone
+
+            def prepare():
+                parsed = parse_result_rows(rows, cooperative=True)
+                return parsed, aggregate_results(parsed, *state, zone, cooperative=True)
+
+            def completed(result):
+                if self._closed or generation != self._generation:
+                    return
+                parsed, prepared = result
+                self._accept_rows(parsed)
+                current = (self.game_combo.currentData(), self.limit_combo.currentData(), self.group_combo.currentData())
+                self._rebuild_table(prepared=prepared if state == current else None)
+
+            self._start_task(prepare, completed,
+                             lambda message: self._fail_results(generation, _("Could not read result data: ") + message),
+                             category="rows")
+            return
         try:
             parsed = parse_result_rows(rows)
-        except (ValueError, TypeError, ArithmeticError) as error:
+        except (ValueError, TypeError, ArithmeticError, IndexError) as error:
             self._fail_results(generation, _("Could not read result data: ") + str(error))
             return
+        self._accept_rows(parsed)
+        self._rebuild_table()
+
+    def _accept_rows(self, parsed):
+        self._invalidate_graph_request(discard=True)
         self.raw_hands = parsed
+        self._data_generation = self._generation
+        self._curve_cache.clear()
         self._loading = False
         self._results_current = True
         self._has_load_error = False
         self._request_status = ""
         self._populate_filters()
-        self._rebuild_table()
 
     def _populate_filters(self) -> None:
         games = sorted({hand.game for hand in self.raw_hands})
@@ -522,12 +767,48 @@ class GuiResultsViewer(QWidget):
             items.append(item)
         return items
 
-    def _rebuild_table(self) -> None:
-        game, stake = self.game_combo.currentData(), self.limit_combo.currentData()
-        self.filtered_hands = tuple(h for h in self.raw_hands if (game is None or h.game == game) and (stake is None or h.stake_key == stake))
-        self.periods = group_results(self.filtered_hands, self.group_combo.currentData(), self.zone)
-        self.total = summarize_results(self.filtered_hands)
+    def _rebuild_table(self, *_args, prepared=None) -> None:
+        self._view_generation += 1
+        if prepared is None:
+            state = (self.game_combo.currentData(), self.limit_combo.currentData(), self.group_combo.currentData())
+            hands, zone = self.raw_hands, self.zone
+            if len(hands) > INLINE_HAND_LIMIT:
+                self._start_table_aggregation(hands, state, zone)
+                return
+            prepared = aggregate_results(hands, *state, zone)
+        self.filtered_hands, self.periods, self.total = prepared
         self._update_filter_chips()
+        self._populate_result_models()
+        self._restore_period_selection()
+
+    def _start_table_aggregation(self, hands, state, zone) -> None:
+        view_generation = self._view_generation
+        generation = self._generation
+        data_generation = self._data_generation
+        if data_generation == generation and not self._has_load_error:
+            self._begin_load_timing()
+            self._loading = True
+            self._results_current = False
+            self._request_status = _("Loading results…")
+        self._update_status()
+
+        def completed(result):
+            if (not self._closed and generation == self._generation
+                    and data_generation == self._data_generation and view_generation == self._view_generation):
+                if data_generation == generation and not self._has_load_error:
+                    self._loading = False
+                    self._results_current = True
+                    self._request_status = ""
+                self._rebuild_table(prepared=result)
+
+        def failed(message):
+            if (view_generation == self._view_generation and data_generation == self._data_generation
+                    and data_generation == generation):
+                self._fail_results(generation, message)
+
+        self._start_task(lambda: aggregate_results(hands, *state, zone, cooperative=True), completed, failed)
+
+    def _populate_result_models(self) -> None:
         self.table.selectionModel().blockSignals(True)
         self.model.clear()
         self.model.setHorizontalHeaderLabels([_(heading) for heading in HEADINGS])
@@ -549,6 +830,8 @@ class GuiResultsViewer(QWidget):
         self.total_model.appendRow(self._items(self.total))
         self.table.selectionModel().blockSignals(False)
         self._sync_total_columns()
+
+    def _restore_period_selection(self) -> None:
         if self.selection == "total":
             self.select_total()
             return
@@ -593,8 +876,45 @@ class GuiResultsViewer(QWidget):
             return self.total
         return next((period for period in self.periods if period.start == self.selection), summarize_results(()))
 
+    def _invalidate_graph_request(self, *, discard=False) -> None:
+        self._curve_generation += 1
+        self._pending_curve = None
+        if discard:
+            self._curve_requests.clear()
+            for worker in self._tasks:
+                if getattr(worker, "category", None) == "curve":
+                    cancel = getattr(worker, "cancel", None)
+                    if cancel is not None:
+                        cancel()
+
     def _render_graph(self) -> None:
         result = self.selected_result()
+        self._update_graph_selection(result)
+        if not result.hands:
+            self._clear_empty_graph()
+            return
+        in_bb = bool(self.units_combo.currentData())
+        cache_key = (id(result.hands), in_bb)
+        request_key = (self._generation, self._data_generation, *cache_key)
+        if self._pending_curve == request_key:
+            return
+        self._invalidate_graph_request()
+        cached = self._curve_cache.get(cache_key)
+        if cached is None and len(result.hands) > INLINE_HAND_LIMIT:
+            self._start_curve_request(result, in_bb, cache_key, request_key)
+            return
+        try:
+            curves = cached[1] if cached is not None else profit_curves(result.hands, in_bb=in_bb)
+        except ValueError as error:
+            self.graph.clear()
+            self.status.setText(str(error))
+            self._load_started = None
+            self._finish_interactive_load()
+            self.results_failed.emit()
+            return
+        self._plot_result_curves(result, curves)
+
+    def _update_graph_selection(self, result) -> None:
         self._update_status()
         self._update_empty_state()
         self.graph_panel.setVisible(bool(self.filtered_hands))
@@ -602,19 +922,67 @@ class GuiResultsViewer(QWidget):
         self.all_periods_button.setChecked(self.selection == "total")
         heading = _("All periods") if self.selection == "total" else self._label(result)
         self.selection_label.setText(heading + _(" · {0} hands").format(len(result.hands)))
-        if not result.hands:
-            self.graph.clear()
-            self.graph.setTitle(_("No results"), color=get_theme_palette()['muted_text'])
-            self.graph.setLabel("bottom", _("Hands"))
-            self.graph.setLabel("left", "BB" if self.units_combo.currentData() else "$")
-            self._graph_context = None
+
+    def _clear_empty_graph(self) -> None:
+        self._invalidate_graph_request()
+        self.graph.clear()
+        self.graph.setTitle(_("No results"), color=get_theme_palette()['muted_text'])
+        self.graph.setLabel("bottom", _("Hands"))
+        self.graph.setLabel("left", "BB" if self.units_combo.currentData() else "$")
+        self._graph_context = None
+        self._report_results_ready()
+
+    def _start_curve_request(self, result, in_bb, cache_key, request_key) -> None:
+        self._begin_load_timing()
+        curve_generation = self._curve_generation
+        generation = self._generation
+        data_generation = self._data_generation
+        self._pending_curve = request_key
+        self.graph.clear()
+        self.graph.setTitle(_("Loading results…"), color=get_theme_palette()['muted_text'])
+        self.graph.setLabel("left", "BB" if in_bb else "$")
+        self._graph_context = None
+        existing = self._curve_requests.get(request_key)
+        if existing is not None:
+            # Re-selecting an in-flight curve makes its existing reply current.
+            existing["generation"] = curve_generation
             return
-        try:
-            curves = profit_curves(result.hands, in_bb=bool(self.units_combo.currentData()))
-        except ValueError as error:
-            self.graph.clear()
-            self.status.setText(str(error))
-            return
+        request = {"generation": curve_generation}
+        self._curve_requests[request_key] = request
+
+        def is_current():
+            return (not self._closed and generation == self._generation
+                    and data_generation == self._data_generation and request["generation"] == self._curve_generation
+                    and self._pending_curve == request_key)
+
+        def forget_request():
+            if self._curve_requests.get(request_key) is request:
+                del self._curve_requests[request_key]
+
+        def completed(curves):
+            forget_request()
+            if not is_current():
+                return
+            self._pending_curve = None
+            if len(self._curve_cache) >= 8:
+                self._curve_cache.clear()
+            self._curve_cache[cache_key] = (result.hands, curves)
+            self._render_graph()
+
+        def failed(message):
+            forget_request()
+            if is_current():
+                self._pending_curve = None
+                self.status.setText(message)
+                self.graph.clear()
+                self._load_started = None
+                self._finish_interactive_load()
+                self.results_failed.emit()
+
+        self._start_task(lambda: tuple(np.asarray(curve) for curve in profit_curves(result.hands, in_bb=in_bb, cooperative=True)),
+                         completed, failed, category="curve")
+
+    def _plot_result_curves(self, result, curves) -> None:
         self.graph.plot_profit_data(tuple(np.asarray(curve) for curve in curves), [h.hand_id for h in result.hands],
                                     units="BB" if self.units_combo.currentData() else "$",
                                      title=f"{self._label(result)} · {len(result.hands)} " + _("hands"), show_all_lines=True)
@@ -631,6 +999,7 @@ class GuiResultsViewer(QWidget):
                                         ("#48bb78", "#3182ce", "#f56565", "#dd6b20")):
             check.setStyleSheet(f"color:{palette.get(key, fallback)}")
         self._line_visibility()
+        self._report_results_ready()
 
     def _update_filter_chips(self) -> None:
         entries = []
@@ -717,18 +1086,32 @@ class GuiResultsViewer(QWidget):
 
     def shutdown_workers(self) -> None:
         self._closed = True
+        self._finish_interactive_load()
         self._custom_date_timer.stop()
         self._generation += 1
-        for worker in self._workers:
-            worker.wait()
-        self._workers.clear()
+        for worker in self._tasks:
+            cancel = getattr(worker, "cancel", None)
+            if cancel is not None:
+                cancel()
+        workers = [worker for worker in (*self._workers, *self._tasks) if isinstance(worker, QThread)]
+        retain_until_finished(workers)
 
     def close_owned_database(self) -> None:
         self.shutdown_workers()
         if self._owns_db and not self._db_closed:
-            with contextlib.suppress(Exception):
-                self.db.disconnect()
             self._db_closed = True
+            db, setup = self.db, self._setup_worker
+
+            def disconnect():
+                database = db
+                if database is None and setup is not None and setup.result is not None:
+                    database = setup.result[0]
+                if database is not None:
+                    with contextlib.suppress(Exception):
+                        database.disconnect()
+
+            workers = [worker for worker in (*self._workers, *self._tasks) if isinstance(worker, QThread)]
+            retain_until_finished(workers, disconnect)
 
     def closeEvent(self, event) -> None:
         self.close_owned_database()

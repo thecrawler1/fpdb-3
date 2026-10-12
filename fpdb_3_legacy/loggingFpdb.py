@@ -1582,6 +1582,8 @@ class FpdbLogger:
             **kwargs: Keyword arguments for message formatting.
 
         """
+        if not self.logger.isEnabledFor(logging.DEBUG):
+            return
         stacklevel = self._get_stacklevel()  # Calculate stack level for accurate information
         self.logger.debug(msg, *args, stacklevel=stacklevel, **kwargs)
 
@@ -1594,6 +1596,8 @@ class FpdbLogger:
             **kwargs: Keyword arguments for message formatting.
 
         """
+        if not self.logger.isEnabledFor(logging.INFO):
+            return
         stacklevel = self._get_stacklevel()
         self.logger.info(msg, *args, stacklevel=stacklevel, **kwargs)
 
@@ -1650,6 +1654,8 @@ class FpdbLogger:
             **kwargs: Keyword arguments for message formatting.
 
         """
+        if not self.logger.isEnabledFor(level):
+            return
         stacklevel = self._get_stacklevel()
         self.logger.log(level, msg, *args, stacklevel=stacklevel, **kwargs)
 

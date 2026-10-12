@@ -103,7 +103,7 @@ class StudyRowDelegate(QStyledItemDelegate):
         title = painter.fontMetrics().elidedText(str(index.data() or ""), Qt.TextElideMode.ElideRight, rect.width())
         painter.drawText(rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, title)
         font.setWeight(QFont.Weight.Normal)
-        font.setPixelSize(12)
+        font.setPixelSize(15)
         painter.setFont(font)
         painter.setPen(QColor(colors['muted_text']))
         subtitle = painter.fontMetrics().elidedText(str(index.data(257) or ""), Qt.TextElideMode.ElideRight, rect.width())
@@ -152,8 +152,8 @@ class GuiStudyExplorer(QWidget):
             QLabel {{background:transparent;}}
             QListWidget {{background:{colors['base']}; border:1px solid {colors['border']}; border-radius:6px;}}
             QFrame#studyDetail {{background:{colors['base']}; border:1px solid {colors['border']}; border-radius:8px;}}
-            QPushButton[studyCategory='true'] {{font-size:11px; padding:6px 8px; text-transform:none;
-                min-width:0; min-height:0; font-weight:500;}}
+            QPushButton[studyCategory='true'] {{font-size:16px; padding:10px 12px; text-transform:none;
+                min-width:0; min-height:52px; font-weight:600;}}
         """)
         muted = colors.get("muted_text", "#a0aec0")
         layout = QVBoxLayout(self)
@@ -528,7 +528,7 @@ class GuiStudyExplorer(QWidget):
             button = QPushButton(f"{category.label}\n{category.study_count} studies")
             button.setProperty("studyCategory", True)
             button.setToolTip(category.description)
-            button.setMinimumHeight(42)
+            button.setMinimumHeight(76)
             button.setCheckable(True)
             button.setChecked(category.id == self._category_id)
             button.setEnabled(category.study_count > 0)

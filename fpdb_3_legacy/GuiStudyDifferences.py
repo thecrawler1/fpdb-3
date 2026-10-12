@@ -110,6 +110,9 @@ class GuiStudyDifferences(QWidget):
         self._worker: _DifferencesWorker | None = None
         self._report: DifferenceReport | None = None
         self._build_ui()
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, self.run_report)
 
     def _build_ui(self) -> None:  # noqa: PLR0915 - one cohesive discovery page
         colors = get_theme_palette()

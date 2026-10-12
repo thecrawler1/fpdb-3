@@ -33,6 +33,8 @@ def _palette(dark: bool) -> dict[str, str]:
         card, card_border = neutral(.91), neutral(.70)
         card_red, card_blue, card_green, card_black = (oklch_hex(.38, .085, 20), oklch_hex(.38, .075, 245),
                                                       oklch_hex(.38, .065, 160), text)
+    graph_profit, graph_loss, graph_sd, graph_ev = (("#39d98a", "#ff647c", "#45a6ff", "#fbbf3a") if dark else
+                                                  ("#118644", "#d3334a", "#176ed3", "#a16b00"))
     return dict(window=window, base=base, sidebar=window, sidebar_panel=panel, surface=base,
                 surface_panel=base, app_header=window, panel=panel, panel_alt=hover,
                 input=panel, input_hover=hover, button=panel, button_hover=hover,
@@ -43,9 +45,9 @@ def _palette(dark: bool) -> dict[str, str]:
                 highlighted_text=text, table_header=panel, table_header_hover=hover, table_header_text=muted,
                 tooltip=panel, tooltip_border=control_border, on_accent=window if dark else base,
                 success=success, danger=danger, info=info, warning=warning,
-                graph_up=success, graph_down=danger, graph_showdown=info, graph_nonshowdown=danger,
-                graph_ev=warning, graph_no_splash=oklch_hex(.80 if dark else .45, .08, 300),
-                graph_hands=muted, graph_purple=info,
+                graph_up=graph_profit, graph_down=graph_loss, graph_showdown=graph_sd, graph_nonshowdown=graph_loss,
+                graph_ev=graph_ev, graph_no_splash="#22c7bb" if dark else "#117d77",
+                graph_hands=graph_profit, graph_purple=graph_sd,
                 card=card, card_border=card_border, card_red=card_red, card_blue=card_blue,
                 card_green=card_green, card_black=card_black,
                 result_positive_bg=oklch_hex(.25 if dark else .94, .016, 160),

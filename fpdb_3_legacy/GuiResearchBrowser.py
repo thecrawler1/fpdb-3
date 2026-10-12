@@ -77,7 +77,7 @@ from fpdb_3_legacy.GuiResearchViews import CompositionWidget, MoneyWidget, Range
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.loggingFpdb import get_logger
 from fpdb_3_legacy.research_worker_db import WorkerDatabase, worker_database
-from fpdb_3_legacy.responsive_layout import PaneSwitcher, ResponsiveSplitter, wrap_in_scroll
+from fpdb_3_legacy.responsive_layout import ResponsiveSplitter, wrap_in_scroll
 from fpdb_3_legacy.ring_stats.styles import get_theme_palette
 from fpdb_3_legacy.table_export import install_table_export
 
@@ -624,6 +624,9 @@ class GuiResearchBrowser(QWidget):
         self._add_default_filters()
         self._refresh_empty_state()
         self._update_summary()
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, self.run_query)
 
     # -- UI construction ----------------------------------------------------
 
@@ -672,7 +675,9 @@ class GuiResearchBrowser(QWidget):
         # times as much to see the same thing. The bar shows one pane at a time
         # so the chosen pane takes the whole height; it is hidden again as soon
         # as the panes fit side by side, where the splitter is the better tool.
-        self.pane_switcher = PaneSwitcher(
+        from fpdb_3_legacy.responsive_layout import WorkspaceTabs
+
+        self.pane_switcher = WorkspaceTabs(
             self,
             self.splitter,
             self._panes(),
@@ -680,8 +685,8 @@ class GuiResearchBrowser(QWidget):
             sizes=PANE_WIDTHS,
         )
         self.narrow_view_bar = self.pane_switcher.bar
-        layout.addWidget(self.narrow_view_bar)
-        layout.addWidget(self.splitter)
+        self.pane_switcher.set_active(1)
+        layout.addWidget(self.pane_switcher, 1)
         self.splitter.stacked_changed.connect(self._on_stacked_changed)
         self._on_stacked_changed(self.splitter.is_stacked())
 

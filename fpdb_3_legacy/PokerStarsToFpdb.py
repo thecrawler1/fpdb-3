@@ -706,6 +706,7 @@ class PokerStars(HandHistoryConverter):
         # Clean up archive formats and handle multiple hands
         cleaned_handlist = []
         for i, hand_text in enumerate(handlist):
+            self._cooperate(i)
             log.debug("Processing hand %d/%d", i + 1, len(handlist))
 
             # Skip empty hands

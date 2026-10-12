@@ -166,7 +166,8 @@ def show_no_data(
     headline, hint = _message(reason)
     log.warning("%s: no data (%s) - %s", context or "GUI", reason.value, headline)
 
-    if QApplication.instance() is None:  # headless (tests, CLI import)
+    automatic = getattr(parent, "property", lambda _name: False)("fpdb_auto_loading")
+    if QApplication.instance() is None or automatic:  # avoid an empty-data popup on opening a tab
         return reason
 
     msg = QMessageBox(parent)

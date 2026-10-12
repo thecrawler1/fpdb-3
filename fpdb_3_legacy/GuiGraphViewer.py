@@ -39,6 +39,7 @@ from fpdb_3_legacy import Database, Filters, gui_empty_state
 from fpdb_3_legacy.i18n import gettext as _
 from fpdb_3_legacy.localized_formats import currency_symbol, format_number
 from fpdb_3_legacy.loggingFpdb import get_logger
+from fpdb_3_legacy.ring_stats.styles import get_theme_palette
 
 # import L10n
 # _ = L10n.get_translation()
@@ -104,6 +105,9 @@ class GuiGraphViewer(QSplitter):
         self.exportFile = None
 
         self.db.rollback()
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, lambda: self.generateGraph(None))
 
     def close_owned_database(self) -> None:
         """Release the connection created for this tab."""
@@ -230,28 +234,10 @@ class GuiGraphViewer(QSplitter):
 
         self.plot_widget.addLine(y=0, pen=pg.mkPen(color=zero_color, width=1, style=Qt.PenStyle.DashLine))
 
-        if is_dark:
-            color_map = {
-                "c": "#22c55e",
-                "b": "#00a2ff",
-                "m": "#f43f5e",
-                "g": "#22c55e",
-                "r": "#f43f5e",
-                "orange": "#ff9f43",
-            }
-        else:
-            color_map = {
-                "c": "#15803d",
-                "b": "#1d4ed8",
-                "m": "#be123c",
-                "g": "#15803d",
-                "r": "#be123c",
-                "orange": "#d97706",
-            }
-
         def get_modern_color(key: str, fallback: str) -> str:
-            val = self.colors.get(key, fallback)
-            return color_map.get(val, val)
+            roles = {"line_hands": "graph_up", "line_showdown": "graph_showdown", "line_nonshowdown": "graph_nonshowdown",
+                     "line_ev": "graph_ev", "line_no_splash": "graph_no_splash"}
+            return get_theme_palette()[roles[key]]
 
         if "showdown" in graphops and len(blue) > 0:
             self.plot_widget.plot(
@@ -270,14 +256,14 @@ class GuiGraphViewer(QSplitter):
         if "ev" in graphops and len(orange) > 0:
             self.plot_widget.plot(
                 orange,
-                pen=pg.mkPen(color=get_modern_color("line_ev", "orange"), width=1.8, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color=get_modern_color("line_ev", "orange"), width=2),
                 name=("All-in EV") + f" ({display_in}): {format_number(orange[-1])}",
             )
 
         if "nosplash" in graphops and len(nosplash) > 0 and not np.array_equal(nosplash, green):
             self.plot_widget.plot(
                 nosplash,
-                pen=pg.mkPen(color=get_modern_color("line_no_splash", "orange"), width=1.8, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color=get_modern_color("line_no_splash", "orange"), width=2),
                 name=_("Net profit excluding splash") + f" ({display_in}): {format_number(nosplash[-1])}",
             )
 

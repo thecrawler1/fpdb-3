@@ -916,6 +916,12 @@ class GuiReplayer(QWidget):
         self.deckPreview.setFixedSize(62, 30)
         self.deckPreview.setToolTip(_("Current card deck preview"))
         self.buttonBox2.addWidget(self.deckPreview)
+        self.closeButton = QPushButton(_("Close"), self)
+        self.closeButton.setToolTip(_("Close replayer (Esc)"))
+        self.closeButton.setShortcut("Esc")
+        self.closeButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.closeButton.clicked.connect(self.close)
+        self.buttonBox2.addWidget(self.closeButton)
 
         # The hand being replayed, for sharing; an OFC replay has none.
         self.shared_hand: Any = None

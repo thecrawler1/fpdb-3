@@ -1597,8 +1597,6 @@ class HudMain(QObject):
         self.vb = QVBoxLayout()
         self.vb.setContentsMargins(2, 0, 2, 0)
         self.main_window.setLayout(self.vb)
-        self.label = QLabel("Closing this window will exit from the HUD.")
-        self.vb.addWidget(self.label)
         if self.config.os_family == "Mac":
             self._macos_permissions_dialog = None
             self.macos_permissions_button = QPushButton("macOS Permissions…")
@@ -1616,7 +1614,14 @@ class HudMain(QObject):
         self.check_tables_timer = QTimer(self)
         self.check_tables_timer.timeout.connect(self.check_tables)
         self.check_tables_timer.start(800)
-        self.main_window.show()
+        if self.config.os_family == "Mac":
+            self.main_window.show()
+        else:
+            # Keep the HUD controller in the background; only table overlays
+            # should appear on screen. It must survive the last table closing.
+            app = QApplication.instance()
+            if app is not None:
+                app.setQuitOnLastWindowClosed(False)
 
     def close_event_handler(self, event: QCloseEvent) -> None:
         """Handle the close event of the main window."""

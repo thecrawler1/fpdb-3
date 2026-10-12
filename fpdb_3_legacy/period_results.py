@@ -7,6 +7,8 @@ from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
 from typing import Any
 
+from fpdb_3_legacy.cooperative_work import checkpoint
+
 ZERO = Decimal(0)
 HUNDRED = Decimal(100)
 
@@ -45,9 +47,11 @@ class PeriodResult:
     bb_hands: int
 
 
-def parse_result_rows(rows: Iterable[tuple[Any, ...]]) -> tuple[ResultHand, ...]:
+def parse_result_rows(rows: Iterable[tuple[Any, ...]], *, cooperative: bool = False) -> tuple[ResultHand, ...]:
     parsed = []
-    for row in rows:
+    for index, row in enumerate(rows):
+        if cooperative and index % 2048 == 0:
+            checkpoint()
         timestamp = row[1] if isinstance(row[1], datetime) else datetime.fromisoformat(str(row[1]))
         timestamp = timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp
         profit = Decimal(str(row[2] or 0))
@@ -84,36 +88,54 @@ def period_end(start: date, grouping: str) -> date:
     raise ValueError(f"Unknown calendar grouping: {grouping}")
 
 
-def summarize_results(hands: Iterable[ResultHand], start: date | None = None, end: date | None = None) -> PeriodResult:
+def summarize_results(hands: Iterable[ResultHand], start: date | None = None, end: date | None = None,
+                      *, cooperative: bool = False) -> PeriodResult:
     ordered = tuple(sorted(hands, key=lambda hand: (hand.timestamp, hand.hand_id)))
-    bb = [hand for hand in ordered if hand.big_blind > 0]
-    vpip_chances = sum(hand.vpip_chance for hand in ordered)
-    pfr_chances = sum(hand.pfr_chance for hand in ordered)
+    profit = ev = bb_profit = bb_ev = ZERO
+    vpip = pfr = vpip_chances = pfr_chances = bb_hands = 0
+    for index, hand in enumerate(ordered):
+        if cooperative and index % 2048 == 0:
+            checkpoint()
+        profit += hand.profit
+        ev += hand.ev
+        vpip += hand.vpip
+        pfr += hand.pfr
+        vpip_chances += hand.vpip_chance
+        pfr_chances += hand.pfr_chance
+        if hand.big_blind > 0:
+            bb_hands += 1
+            bb_profit += hand.profit / hand.big_blind
+            bb_ev += hand.ev / hand.big_blind
     return PeriodResult(
-        start, end, ordered, sum((h.profit for h in ordered), ZERO), sum((h.ev for h in ordered), ZERO),
-        HUNDRED * sum(h.vpip for h in ordered) / vpip_chances if vpip_chances else None,
-        HUNDRED * sum(h.pfr for h in ordered) / pfr_chances if pfr_chances else None,
-        HUNDRED * sum((h.profit / h.big_blind for h in bb), ZERO) / len(bb) if bb else None,
-        HUNDRED * sum((h.ev / h.big_blind for h in bb), ZERO) / len(bb) if bb else None,
-        len(bb),
+        start, end, ordered, profit, ev,
+        HUNDRED * vpip / vpip_chances if vpip_chances else None,
+        HUNDRED * pfr / pfr_chances if pfr_chances else None,
+        HUNDRED * bb_profit / bb_hands if bb_hands else None,
+        HUNDRED * bb_ev / bb_hands if bb_hands else None,
+        bb_hands,
     )
 
 
-def group_results(hands: Iterable[ResultHand], grouping: str, zone: tzinfo) -> list[PeriodResult]:
+def group_results(hands: Iterable[ResultHand], grouping: str, zone: tzinfo, *, cooperative: bool = False) -> list[PeriodResult]:
     groups: dict[date, list[ResultHand]] = defaultdict(list)
-    for hand in hands:
+    for index, hand in enumerate(hands):
+        if cooperative and index % 2048 == 0:
+            checkpoint()
         groups[period_start(hand.timestamp.astimezone(zone).date(), grouping)].append(hand)
-    return [summarize_results(groups[start], start, period_end(start, grouping)) for start in sorted(groups, reverse=True)]
+    return [summarize_results(groups[start], start, period_end(start, grouping), cooperative=cooperative)
+            for start in sorted(groups, reverse=True)]
 
 
-def profit_curves(hands: Iterable[ResultHand], *, in_bb: bool = False) -> tuple[list[float], ...]:
+def profit_curves(hands: Iterable[ResultHand], *, in_bb: bool = False, cooperative: bool = False) -> tuple[list[float], ...]:
     """All curves start at zero, ordered by time/id; SD + NSD always equals net."""
     ordered = sorted(hands, key=lambda hand: (hand.timestamp, hand.hand_id))
     if in_bb and any(hand.big_blind <= 0 for hand in ordered):
         raise ValueError("BB graph requires a usable big blind for every hand")
     values = [ZERO, ZERO, ZERO, ZERO]
     curves = [[0.0] for _ in values]
-    for hand in ordered:
+    for index, hand in enumerate(ordered):
+        if cooperative and index % 2048 == 0:
+            checkpoint()
         unit = hand.big_blind if in_bb else HUNDRED
         net, ev = hand.profit / unit, hand.ev / unit
         increments = (net, net if hand.showdown else ZERO, ZERO if hand.showdown else net, ev)

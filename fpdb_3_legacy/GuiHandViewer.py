@@ -382,6 +382,7 @@ class GuiHandViewer(QSplitter):
         self._active_search = ""
         self.hands: OrderedDict[Any, Any] = OrderedDict()
         self._rendered_page: int | None = None
+        self._linked_population = False
         self.page = 0
         self.page_size = 100
         self._sort_column = self.colnum["Date"]
@@ -461,6 +462,16 @@ class GuiHandViewer(QSplitter):
 
         self.columnControls.resize_to_contents()
         self.view.setSortingEnabled(True)
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, self._automatic_hand_refresh)
+
+    def _automatic_hand_refresh(self) -> None:
+        if self._linked_population and self._loaded_handids:
+            self.hands.clear()
+            self.render_page()
+        else:
+            self.loadHands(None)
 
     def _replay_selected(self) -> None:
         index = self.view.currentIndex()
@@ -769,7 +780,7 @@ class GuiHandViewer(QSplitter):
             self.filters.getDates()[1],
         )
         # ! print(hand_ids)
-        self.reload_hands(hand_ids)
+        self.reload_hands(hand_ids, from_filters=True)
 
     def get_hand_ids_from_date_range(self, start, end):
         q = self.db.sql.query["handsInRangeSessionFilter"]
@@ -881,9 +892,13 @@ class GuiHandViewer(QSplitter):
             return card1 * 14 * 14 + card2 * 14 + suit1
         return 0
 
-    def reload_hands(self, handids) -> None:
+    def reload_hands(self, handids, *, from_filters=False) -> None:
         if self._page_loading:
             return
+        self._linked_population = not from_filters
+        loader = getattr(self, "_fpdb_auto_loader", None)
+        if loader is not None:
+            loader.dirty = False
         self.hands = OrderedDict()
         self._loaded_handids = list(dict.fromkeys(handids))
         self.all_handids = list(self._loaded_handids)

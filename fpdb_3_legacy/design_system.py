@@ -210,6 +210,10 @@ class DesignPolish(QObject):
         try:
             if kind != QEvent.Type.Paint:
                 self.polish_widget(watched)
+            if kind == QEvent.Type.Show and watched.__class__.__name__ in (
+                "GuiStudyExplorer", "GuiResearchBrowser", "GuiStudyDashboard", "GuiStudyDifferences",
+            ):
+                self.polish_research_typography(watched)
             if kind == QEvent.Type.Show and isinstance(watched, QAbstractItemView):
                 self.fit_combo_popup(watched)
                 # QComboBox applies its final popup geometry after the view's Show.
@@ -239,6 +243,21 @@ class DesignPolish(QObject):
             from fpdb_3_legacy.table_columns import install_column_controls
 
             install_column_controls(widget)
+
+    @staticmethod
+    def polish_research_typography(page) -> None:
+        """Keep research captions readable instead of stacking tiny local fonts."""
+        from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QComboBox, QLineEdit
+
+        for widget in page.findChildren(QWidget):
+            if not isinstance(widget, (QLabel, QAbstractItemView, QAbstractSpinBox, QComboBox, QLineEdit)):
+                continue
+            font = widget.font()
+            pixels = font.pixelSize() if font.pixelSize() > 0 else font.pointSizeF() * page.logicalDpiY() / 72
+            if pixels < 15:
+                style = widget.styleSheet()
+                extra = f"{widget.__class__.__name__} {{font-size:15px;}}" if "{" in style else "font-size:15px;"
+                widget.setStyleSheet(style + "\n" + extra + STYLE_MARKER)
 
     @staticmethod
     def fit_combo_popup(view) -> None:
@@ -281,6 +300,11 @@ class DesignPolish(QObject):
             item.titleLabel.setText(modernize_rich_text(title))
         for name in ("left", "bottom", "right", "top"):
             axis = item.getAxis(name)
+            tick_font = axis.style.get("tickFont")
+            if tick_font is None or (tick_font.pixelSize() > 0 and tick_font.pixelSize() < 15):
+                readable = QFont("DejaVu Sans")
+                readable.setPixelSize(15)
+                axis.setStyle(tickFont=readable)
             styles = dict(axis.labelStyle)
             size = styles.get("font-size")
             previous = getattr(axis, "_fpdb_scaled_size", None)

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -52,7 +53,6 @@ from fpdb_3_legacy.research_study_explorer import StudySelection
 from fpdb_3_legacy.research_worker_db import worker_database
 from fpdb_3_legacy.responsive_layout import (
     CollapsibleSection,
-    PaneSwitcher,
     cap_context_block,
     wrap_in_scroll,
 )
@@ -143,7 +143,7 @@ class GuiStudyDashboard(QWidget):
         self._workers: list[_DashboardWorker] = []
         self._results: dict[str, Any] = {}
         self._pages: dict[str, tuple[QLabel, QTableWidget]] = {}
-        self._result_splitters: dict[str, QSplitter] = {}
+        self._result_tabs: dict[str, QTabWidget] = {}
         self._distribution_widgets: dict[str, DistributionChartWidget] = {}
         self._matrix_widgets: dict[str, MatrixHeatmapWidget] = {}
         self._range_widgets: dict[str, RangeGridWidget] = {}
@@ -311,15 +311,11 @@ class GuiStudyDashboard(QWidget):
                 self._range_widgets[panel.id] = grid
                 visual = grid
             if visual is not None:
-                result_splitter = QSplitter(Qt.Orientation.Vertical)
-                result_splitter.setChildrenCollapsible(False)
-                result_splitter.addWidget(visual)
-                result_splitter.addWidget(table)
-                result_splitter.setStretchFactor(0, 0)
-                result_splitter.setStretchFactor(1, 1)
-                result_splitter.setSizes([300, 420])
-                page_layout.addWidget(result_splitter, 1)
-                self._result_splitters[panel.id] = result_splitter
+                result_tabs = QTabWidget()
+                result_tabs.addTab(visual, "Chart")
+                result_tabs.addTab(table, "Data")
+                page_layout.addWidget(result_tabs, 1)
+                self._result_tabs[panel.id] = result_tabs
             else:
                 page_layout.addWidget(table, 1)
             self._pages[panel.id] = (status, table)
@@ -372,7 +368,9 @@ class GuiStudyDashboard(QWidget):
         # splitter: it is full width and sits above what it explains, so the
         # splitter is what steps aside while the block is the zone on screen.
         # ``sizes`` is the splitter's own arrangement, not one entry per zone.
-        self.pane_switcher = PaneSwitcher(
+        from fpdb_3_legacy.responsive_layout import WorkspaceTabs
+
+        self.pane_switcher = WorkspaceTabs(
             self,
             self.splitter,
             [self.header_area, panels, self.source_hands],
@@ -383,9 +381,7 @@ class GuiStudyDashboard(QWidget):
         # The bar comes first, above every zone it switches. Added after the
         # block it would sit under the Filters zone and over the Panels one --
         # a bar that moves down the window as the reader changes zone.
-        layout.addWidget(self.pane_switcher.bar)
-        layout.addWidget(self.header_area)
-        layout.addWidget(self.splitter, 1)
+        layout.addWidget(self.pane_switcher, 1)
         self._render_cross_filters()
 
     def showEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
@@ -407,7 +403,7 @@ class GuiStudyDashboard(QWidget):
         """
         switching = self.height() < SWITCH_BELOW_HEIGHT
         self.pane_switcher.set_switching(switching)
-        cap_context_block(self.header_area, self, capped=not switching)
+        cap_context_block(self.header_area, self, capped=False)
 
     def _panel_rail_width(self) -> int:
         """As wide as the longest panel name, within the rail's bounds.

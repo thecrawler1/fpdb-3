@@ -73,7 +73,7 @@ class DistributionChartWidget(QWidget):
             return
 
         palette = get_theme_palette()
-        hero_color = palette.get("accent", "#319795")
+        hero_color = palette.get("graph_up", "#39d98a")
         field_color = palette.get("graph_ev", "#f59e3d")
         labels = [item.label for item in self._bins]
         x = list(range(len(labels)))

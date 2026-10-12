@@ -46,6 +46,15 @@ def test_dark_surfaces_are_ordered_low_chroma_and_cards_do_not_create_white_isla
     assert contrast_ratio(p['card'], p['base']) < 1.6
 
 
+def test_financial_charts_use_vivid_classic_colours_and_never_gray_profit():
+    p = semantic_palette()
+    assert p['graph_hands'] == p['graph_up'] == "#39d98a"
+    assert p['graph_showdown'] == "#45a6ff"
+    assert p['graph_nonshowdown'] == "#ff647c"
+    assert p['graph_ev'] == "#fbbf3a"
+    assert p['graph_up'] != p['muted_text']
+
+
 @pytest.mark.parametrize("dark", [True, False])
 @pytest.mark.parametrize("role", ["success", "danger", "accent"])
 def test_heatmaps_remain_readable_and_preserve_intensity_order(dark, role):

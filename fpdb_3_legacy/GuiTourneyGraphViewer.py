@@ -99,6 +99,9 @@ class GuiTourneyGraphViewer(QSplitter):
 
         self.db.rollback()
         self.exportFile = None
+        from fpdb_3_legacy.automatic_loading import install_automatic_loading
+
+        install_automatic_loading(self, lambda: self.generateGraph(None))
 
     def close_owned_database(self) -> None:
         """Release the connection created for this tab."""
@@ -236,6 +239,9 @@ class GuiTourneyGraphViewer(QSplitter):
             if "line_hands" in self.colors and self.colors["line_hands"] not in ("c", "g"):
                 line_hands_color = self.colors["line_hands"]
 
+        from fpdb_3_legacy.ring_stats.styles import get_theme_palette
+
+        line_hands_color = get_theme_palette()["graph_up"]
         self.plot_widget.plot(
             green,
             pen=pg.mkPen(color=line_hands_color, width=2.5),
